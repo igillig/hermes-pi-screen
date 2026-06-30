@@ -125,11 +125,14 @@ in the same directory.
 
 ### Option C — GitHub Actions self-hosted runner (CI/CD)
 
-If a self-hosted runner is running on the Pi, every push to `main` can build and
-deploy automatically. The workflow lives in `.github/workflows/deploy.yml` and
-runs `docker compose -f stack.yml up -d --build` on the runner.
+If a self-hosted runner is running on the Pi, every push to `main` builds and
+deploys automatically. The workflow lives in `.github/workflows/deploy.yml`: it
+writes a `.env` from GitHub secrets/variables, then runs `docker compose build`
++ `up -d` on the runner.
 
-One-time setup in the repo **Settings → Secrets and variables → Actions**:
+One-time setup in the repo **Settings → Secrets and variables → Actions**,
+under the **`production`** environment (matching `environment: production` in the
+workflow):
 
 | Kind     | Name                  | Value                       |
 | -------- | --------------------- | --------------------------- |
@@ -140,8 +143,8 @@ One-time setup in the repo **Settings → Secrets and variables → Actions**:
 Notes:
 - The runner user must be able to run Docker (e.g. be in the `docker` group) and
   have `docker compose` (v2) available.
-- Adjust `runs-on` labels in the workflow to match your runner (e.g.
-  `[self-hosted, ARM64]`).
+- The workflow uses `runs-on: self-hosted`. If your runner needs extra labels to
+  be targeted, add them there.
 - You can also trigger it manually via **Actions → Deploy parche-ui → Run workflow**.
 
 > Whichever option you use: if you change the API URL or key, you must
