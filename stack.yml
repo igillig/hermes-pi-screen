@@ -1,16 +1,12 @@
 # ─────────────────────────────────────────────────────────────
-# Portainer stack for parche-ui (HERMES frontend)
+# Portainer / docker-compose stack for parche-ui (HERMES frontend)
 #
-# Builds the image on the Raspberry itself from the Dockerfile and
-# serves it with nginx. The VITE_* values are passed as build-args
-# because Vite inlines them at build time.
+# Builds the image and serves it with nginx, which reverse-proxies /api/* to
+# the Hermes container over the shared docker network (hermes-agent_default).
+# The browser talks same-origin, so no IP or API key is baked into the bundle.
 #
-# Works both as a Portainer stack and as a plain `docker compose`
-# file over SSH (see README).
-#
-# In Portainer -> Stacks -> Add stack:
-#   - Build method: Git repository (or paste this file in the web editor)
-#   - Load the variables below under "Environment variables"
+# Works both as a Portainer stack and as `docker compose -f stack.yml ...`
+# over SSH (see README).
 # ─────────────────────────────────────────────────────────────
 
 services:
@@ -19,11 +15,24 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        VITE_HERMES_API_URL: ${VITE_HERMES_API_URL}
-        VITE_HERMES_API_KEY: ${VITE_HERMES_API_KEY}
-        VITE_HERMES_WS_URL: ${VITE_HERMES_WS_URL:-}
+        # Same-origin: the browser calls /api/*, nginx proxies it to Hermes.
+        VITE_HERMES_API_URL: ${VITE_HERMES_API_URL:-/api}
     image: parche-ui:latest
     container_name: parche-ui
+    environment:
+      # Injected into the Authorization header by nginx at runtime (envsubst),
+      # so the key never ships in the browser bundle.
+      HERMES_API_KEY: ${HERMES_API_KEY}
+      NGINX_ENVSUBST_FILTER: HERMES_
     ports:
       - "${HOST_PORT:-8080}:80"
     restart: unless-stopped
+    networks:
+      - default
+      - hermes
+
+networks:
+  # The network Hermes already runs on (created by its own compose project).
+  hermes:
+    name: hermes-agent_default
+    external: true

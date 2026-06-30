@@ -29,9 +29,25 @@ src/
 │   └── useVoice.ts          # Speech recognition + synthesis
 └── types/hermes.ts
 Dockerfile                   # Multi-stage build (node → nginx)
-nginx.conf                   # nginx config (SPA + static asset caching)
+nginx.conf                   # nginx template: SPA + static caching + /api reverse proxy
 stack.yml                    # Portainer / docker-compose stack
 ```
+
+### Architecture / API access
+
+In production, nginx does double duty: it serves the static bundle **and**
+reverse-proxies `/api/*` to the Hermes container over the shared docker network
+`hermes-agent_default` (where Hermes runs as `hermes_agent:8000`).
+
+This means:
+
+- The browser only ever calls **same-origin** `/api/...`, so no Hermes IP is
+  baked into the bundle (change the IP freely, no rebuild needed).
+- The API key is injected into the `Authorization` header **by nginx at runtime**
+  (via `envsubst`, env `HERMES_API_KEY`), so it never ships to the client.
+
+In local development (`npm run dev`) there is no proxy, so you point straight at
+Hermes and the key travels in the bundle (dev only).
 
 ### Internationalization
 
@@ -44,15 +60,17 @@ synthesis language is configured separately via `VOICE_LOCALE` in the same file.
 
 ## Environment variables
 
-> ⚠️ Vite **inlines** the `VITE_*` variables at **build time**; they are not read
-> at runtime. They must be present when running `npm run build` (or passed as
-> build-args when building the Docker image).
+> ⚠️ `VITE_*` variables are **inlined by Vite at build time** (not read at
+> runtime). Non-`VITE_` variables (`HERMES_API_KEY`, `HOST_PORT`) are plain
+> **runtime** env for the container.
 
-| Variable               | Required | Description                                                                 |
-| ---------------------- | -------- | --------------------------------------------------------------------------- |
-| `VITE_HERMES_API_URL`  | Yes      | HTTP URL of the Hermes API. Default: `https://<hostname>:8000`.             |
-| `VITE_HERMES_API_KEY`  | Yes      | API key (`Authorization: Bearer …` header).                                 |
-| `VITE_HERMES_WS_URL`   | No       | WebSocket URL (only `useHermesWS`, legacy). Default: `ws://<host>:9119/api/ws`. |
+| Variable              | Scope         | Required | Description                                                                 |
+| --------------------- | ------------- | -------- | --------------------------------------------------------------------------- |
+| `HERMES_API_KEY`      | runtime       | Yes      | Injected by nginx into the `Authorization` header. Never shipped to the client. |
+| `HOST_PORT`           | runtime       | No       | Host port the UI is published on. Default: `8080`.                          |
+| `VITE_HERMES_API_URL` | build-time    | No       | API base URL baked into the bundle. Default: `/api` (same-origin proxy).    |
+| `VITE_HERMES_API_KEY` | build-time    | dev only | Only for `npm run dev` without the proxy; ignored in the proxied build.     |
+| `VITE_HERMES_WS_URL`  | build-time    | No       | WebSocket URL (only the unused `useHermesWS` hook). Default: `ws://<host>:9119/api/ws`. |
 
 Copy `.env.example` to `.env` and fill in the values:
 
@@ -76,7 +94,8 @@ npm run build    # type-check + produce dist/
 npm run preview  # serve the production build locally
 ```
 
-On Windows pointing at the Raspberry, in your `.env`:
+There is no nginx proxy in `vite dev`, so point straight at Hermes in your `.env`
+(the key travels in the bundle — dev only):
 
 ```env
 VITE_HERMES_API_URL=http://192.168.1.xxx:8000
@@ -88,11 +107,12 @@ VITE_HERMES_API_KEY=your-api-key
 ## Deployment on Raspberry Pi
 
 The stack builds the image on the Raspberry itself and serves it with nginx on
-port `8080` (configurable via `HOST_PORT`). Because the `VITE_*` values are
-inlined at build time, they are passed as **build-args** through environment
-variables.
+port `8080` (configurable via `HOST_PORT`). nginx reverse-proxies `/api` to the
+Hermes container, so the only value you must provide is the runtime
+`HERMES_API_KEY`. parche-ui joins the external `hermes-agent_default` network
+(where Hermes runs), so it must already exist on the host.
 
-Both deployment methods below use the same `stack.yml`. Pick whichever you
+All deployment methods below use the same `stack.yml`. Pick whichever you
 prefer — there is no functional difference.
 
 ### Option A — Portainer stack
@@ -103,11 +123,10 @@ prefer — there is no functional difference.
    - **Web editor**: paste the contents of `stack.yml`.
 3. Under **Environment variables**, add:
 
-   | Name                  | Value                          |
-   | --------------------- | ------------------------------ |
-   | `VITE_HERMES_API_URL` | `http://192.168.1.xxx:8000`    |
-   | `VITE_HERMES_API_KEY` | `your-api-key`                 |
-   | `HOST_PORT`           | `8080` (optional)              |
+   | Name             | Value             |
+   | ---------------- | ----------------- |
+   | `HERMES_API_KEY` | `your-api-key`    |
+   | `HOST_PORT`      | `8080` (optional) |
 
 4. **Deploy the stack**.
 5. Open the UI at `http://<raspberry-ip>:8080`.
@@ -116,12 +135,12 @@ prefer — there is no functional difference.
 
 ```bash
 # On the Raspberry, from the project directory:
-cp .env.example .env        # then edit .env with the real values
+cp .env.example .env        # then set HERMES_API_KEY (and HOST_PORT if needed)
 docker compose -f stack.yml up -d --build
 ```
 
-`docker compose` reads the `VITE_*` and `HOST_PORT` values from the `.env` file
-in the same directory.
+`docker compose` reads `HERMES_API_KEY` and `HOST_PORT` from the `.env` file in
+the same directory.
 
 ### Option C — GitHub Actions self-hosted runner (CI/CD)
 
@@ -134,11 +153,10 @@ One-time setup in the repo **Settings → Secrets and variables → Actions**,
 under the **`production`** environment (matching `environment: production` in the
 workflow):
 
-| Kind     | Name                  | Value                       |
-| -------- | --------------------- | --------------------------- |
-| Variable | `VITE_HERMES_API_URL` | `http://192.168.1.xxx:8000` |
-| Variable | `HOST_PORT`           | `8080` (optional)           |
-| Secret   | `VITE_HERMES_API_KEY` | `your-api-key`              |
+| Kind     | Name             | Value             |
+| -------- | ---------------- | ----------------- |
+| Secret   | `HERMES_API_KEY` | `your-api-key`    |
+| Variable | `HOST_PORT`      | `8080` (optional) |
 
 Notes:
 - The runner user must be able to run Docker (e.g. be in the `docker` group) and
@@ -147,18 +165,19 @@ Notes:
   be targeted, add them there.
 - You can also trigger it manually via **Actions → Deploy parche-ui → Run workflow**.
 
-> Whichever option you use: if you change the API URL or key, you must
-> **redeploy with a rebuild** (Portainer → Stack → *Update* with re-pull/rebuild,
-> `docker compose ... up -d --build`, or just push to `main` with Option C),
-> because the value is baked into the previous build.
+> The API key is a **runtime** env, so rotating it only needs a restart
+> (`docker compose ... up -d`), not a rebuild. A rebuild is only required if you
+> change build-time `VITE_*` values.
 
 ### Manual build (no compose)
 
 ```bash
-docker build \
-  --build-arg VITE_HERMES_API_URL=http://192.168.1.xxx:8000 \
-  --build-arg VITE_HERMES_API_KEY=your-api-key \
-  -t parche-ui:latest .
+docker build -t parche-ui:latest .
 
-docker run -d --restart unless-stopped -p 8080:80 --name parche-ui parche-ui:latest
+docker run -d --restart unless-stopped \
+  -p 8080:80 \
+  --network hermes-agent_default \
+  -e HERMES_API_KEY=your-api-key \
+  -e NGINX_ENVSUBST_FILTER=HERMES_ \
+  --name parche-ui parche-ui:latest
 ```

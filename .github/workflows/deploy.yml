@@ -1,13 +1,14 @@
 name: Deploy parche-ui
 
 # Builds and deploys the container on the Raspberry's self-hosted runner.
-# Vite inlines the VITE_* values at build time, so the .env written below is
-# read by `docker compose build` and baked into the static bundle.
+# nginx reverse-proxies /api to Hermes, so the API key is a runtime env
+# (HERMES_API_KEY) injected by the container, not baked into the bundle.
 #
 # Required GitHub config (Settings -> Secrets and variables -> Actions),
 # under the "production" environment:
-#   Secrets:   VITE_HERMES_API_KEY
-#   Variables: VITE_HERMES_API_URL   (and optionally HOST_PORT, default 8080)
+#   Secrets:   HERMES_API_KEY
+#   Variables: HOST_PORT (optional, default 8080)
+#              VITE_HERMES_API_URL (optional, default /api)
 
 on:
   push:
@@ -30,7 +31,7 @@ jobs:
       - name: Create .env from secrets
         run: |
           echo "VITE_HERMES_API_URL=${{ vars.VITE_HERMES_API_URL }}" > .env
-          echo "VITE_HERMES_API_KEY=${{ secrets.VITE_HERMES_API_KEY }}" >> .env
+          echo "HERMES_API_KEY=${{ secrets.HERMES_API_KEY }}" >> .env
           echo "HOST_PORT=${{ vars.HOST_PORT }}" >> .env
 
       - name: Build and deploy
