@@ -1,0 +1,39 @@
+name: Deploy parche-ui
+
+# Builds and deploys the container on the Raspberry's self-hosted runner.
+# Vite inlines the VITE_* values at build time, so they are injected here as
+# environment variables; docker compose substitutes them into stack.yml.
+#
+# Required GitHub config (Settings -> Secrets and variables -> Actions):
+#   Secrets:   VITE_HERMES_API_KEY
+#   Variables: VITE_HERMES_API_URL   (and optionally HOST_PORT, default 8080)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Never run two deploys at once; let an in-flight deploy finish.
+concurrency:
+  group: deploy-parche-ui
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Adjust the labels to match your runner (e.g. [self-hosted, ARM64]).
+    runs-on: [self-hosted]
+
+    env:
+      VITE_HERMES_API_URL: ${{ vars.VITE_HERMES_API_URL }}
+      VITE_HERMES_API_KEY: ${{ secrets.VITE_HERMES_API_KEY }}
+      HOST_PORT: ${{ vars.HOST_PORT || '8080' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and deploy
+        run: docker compose -f stack.yml up -d --build
+
+      - name: Remove dangling images
+        run: docker image prune -f

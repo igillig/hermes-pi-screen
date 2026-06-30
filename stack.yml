@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────
+# Portainer stack for parche-ui (HERMES frontend)
+#
+# Builds the image on the Raspberry itself from the Dockerfile and
+# serves it with nginx. The VITE_* values are passed as build-args
+# because Vite inlines them at build time.
+#
+# Works both as a Portainer stack and as a plain `docker compose`
+# file over SSH (see README).
+#
+# In Portainer -> Stacks -> Add stack:
+#   - Build method: Git repository (or paste this file in the web editor)
+#   - Load the variables below under "Environment variables"
+# ─────────────────────────────────────────────────────────────
+
+services:
+  parche-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_HERMES_API_URL: ${VITE_HERMES_API_URL}
+        VITE_HERMES_API_KEY: ${VITE_HERMES_API_KEY}
+        VITE_HERMES_WS_URL: ${VITE_HERMES_WS_URL:-}
+    image: parche-ui:latest
+    container_name: parche-ui
+    ports:
+      - "${HOST_PORT:-8080}:80"
+    restart: unless-stopped

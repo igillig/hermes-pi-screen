@@ -1,0 +1,96 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
+
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+html, body, #root {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #020810;
+  font-family: 'Orbitron', monospace;
+  color: #b0e0ff;
+  cursor: default;
+  user-select: none;
+}
+
+.app {
+  width: 100vw; height: 100vh;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ── HUD overlay ────────────────────────────────────── */
+.hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 20px 28px;
+  z-index: 10;
+}
+
+.hud-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.hud-title {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 6px;
+  color: rgba(0, 212, 255, 0.6);
+  text-shadow: 0 0 16px rgba(0, 212, 255, 0.4);
+}
+
+.hud-clock {
+  font-size: 13px;
+  letter-spacing: 3px;
+  color: rgba(0, 212, 255, 0.4);
+}
+
+.hud-center {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 32px;
+}
+
+.hud-state {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 5px;
+  animation: fadeIn 0.3s ease-out;
+}
+.hud-state.listening { color: #ff3a3a; text-shadow: 0 0 12px rgba(255, 58, 58, 0.6); animation: fadeIn 0.3s ease-out, statePulse 0.7s ease-in-out infinite; }
+.hud-state.thinking  { color: #ffaa00; text-shadow: 0 0 12px rgba(255, 170, 0, 0.6);  animation: fadeIn 0.3s ease-out, statePulse 0.55s ease-in-out infinite; }
+.hud-state.speaking  { color: #00d4ff; text-shadow: 0 0 12px rgba(0, 212, 255, 0.6); }
+
+.hud-bottom {
+  display: flex;
+  justify-content: center;
+}
+
+.hud-hint {
+  font-size: 9px;
+  letter-spacing: 4px;
+  color: rgba(0, 212, 255, 0.2);
+  animation: hintBreath 3s ease-in-out infinite;
+}
+
+/* ── Animations ─────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes statePulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.3; }
+}
+
+@keyframes hintBreath {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}
