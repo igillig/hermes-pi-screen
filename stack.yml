@@ -15,8 +15,9 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        # Same-origin: the browser calls /api/*, nginx proxies it to Hermes.
         VITE_HERMES_API_URL: ${VITE_HERMES_API_URL:-/api}
+        VITE_HERMES_WS_URL: ${VITE_HERMES_WS_URL}
+        VITE_OPENAI_API_KEY: ${VITE_OPENAI_API_KEY}
     image: parche-ui:latest
     container_name: parche-ui
     environment:
