@@ -82,7 +82,13 @@ export default function App() {
 
       <div className="hud">
         <div className="hud-top">
-          <span className="hud-title">{STRINGS.appTitle}</span>
+          <div className="hud-title-block">
+            <span className="hud-title">{STRINGS.appTitle}</span>
+            <button
+              className="hud-refresh"
+              onClick={e => { e.stopPropagation(); window.location.reload() }}
+            >↺</button>
+          </div>
           <span className="hud-clock">{hh}:{mm}</span>
         </div>
 
