@@ -32,6 +32,7 @@ jobs:
         run: |
           echo "VITE_HERMES_API_URL=${{ vars.VITE_HERMES_API_URL }}" > .env
           echo "VITE_HERMES_WS_URL=${{ vars.VITE_HERMES_WS_URL }}" >> .env
+          echo "VITE_HERMES_INTERNAL_TOKEN=${{ secrets.VITE_HERMES_INTERNAL_TOKEN }}" >> .env
           echo "VITE_OPENAI_API_KEY=${{ secrets.VITE_OPENAI_API_KEY }}" >> .env
           echo "HERMES_API_KEY=${{ secrets.HERMES_API_KEY }}" >> .env
           echo "HOST_PORT=${{ vars.HOST_PORT }}" >> .env

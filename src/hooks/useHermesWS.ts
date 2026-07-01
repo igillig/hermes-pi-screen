@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import type { ChatMessage } from '../types/hermes'
 
-const getWsUrl = () =>
-  (import.meta.env.VITE_HERMES_WS_URL as string | undefined)
-  ?? `ws://${window.location.hostname}:9119/api/ws`
+const getWsUrl = () => {
+  const base  = (import.meta.env.VITE_HERMES_WS_URL as string | undefined)
+    ?? `ws://${window.location.hostname}:9119/api/ws`
+  const token = import.meta.env.VITE_HERMES_INTERNAL_TOKEN as string | undefined
+  return token ? `${base}?internal=${token}` : base
+}
 
 const RECONNECT_DELAY_MS = 3000
 
