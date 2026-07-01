@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import NeuralOrb, { type OrbState } from './components/NeuralOrb'
-import { useHermesAPI } from './hooks/useHermesAPI'
+import { useHermesWS } from './hooks/useHermesWS'
 import { useVoice } from './hooks/useVoice'
 import { useWakeWord } from './hooks/useWakeWord'
 import { STRINGS } from './i18n/strings'
@@ -13,7 +13,7 @@ const STATE_LABEL: Record<OrbState, string> = {
 }
 
 export default function App() {
-  const { messages, isThinking, sendMessage, cancelStream } = useHermesAPI()
+  const { messages, isThinking, sendMessage } = useHermesWS()
   const {
     isListening, isSpeaking,
     startListening, stopListening,
@@ -29,7 +29,7 @@ export default function App() {
 
   const triggerVoice = () => {
     voiceLoop.current = true
-    startListening().catch(err => console.warn('startListening:', err))
+    startListening()
   }
 
   const { enableWakeWord } = useWakeWord('eu parche', triggerVoice)
@@ -42,7 +42,7 @@ export default function App() {
     lastSpoken.current = last.id
 
     speak(last.content, () => {
-      if (voiceLoop.current) setTimeout(() => startListening().catch(() => {}), 400)
+      if (voiceLoop.current) setTimeout(startListening, 400)
     })
   }, [messages, speak, startListening])
 
@@ -60,9 +60,9 @@ export default function App() {
     } else if (isSpeaking) {
       cancelSpeech()
       voiceLoop.current = true
-      setTimeout(() => startListening().catch(() => {}), 200)
+      setTimeout(startListening, 200)
     } else if (isThinking) {
-      cancelStream()
+      // noop — WS streaming no es cancelable desde el cliente
     } else {
       triggerVoice()
     }
