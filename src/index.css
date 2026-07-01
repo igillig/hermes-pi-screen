@@ -92,6 +92,12 @@ html, body, #root {
   justify-content: center;
 }
 
+.hud-error {
+  font-size: 9px;
+  letter-spacing: 3px;
+  color: rgba(255, 80, 80, 0.8);
+}
+
 .hud-hint {
   font-size: 9px;
   letter-spacing: 4px;

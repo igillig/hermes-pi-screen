@@ -37,6 +37,7 @@ const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY as string | undefined
 export function useVoice(onFinalTranscript: (text: string) => void) {
   const [isListening, setIsListening] = useState(false)
   const [isSpeaking, setIsSpeaking]   = useState(false)
+  const [sttError, setSttError]       = useState('')
 
   const recognitionRef = useRef<InstanceType<typeof SpeechRecognition> | null>(null)
   const audioRef       = useRef<HTMLAudioElement | null>(null)
@@ -61,7 +62,7 @@ export function useVoice(onFinalTranscript: (text: string) => void) {
 
     rec.onend   = () => setIsListening(false)
     rec.onerror = (e: SpeechRecognitionErrorEvent) => {
-      if (e.error !== 'no-speech' && e.error !== 'aborted') console.warn('STT:', e.error)
+      if (e.error !== 'no-speech' && e.error !== 'aborted') setSttError(e.error)
       setIsListening(false)
     }
 
@@ -120,5 +121,5 @@ export function useVoice(onFinalTranscript: (text: string) => void) {
     setIsSpeaking(false)
   }, [])
 
-  return { isListening, isSpeaking, startListening, stopListening, speak, cancelSpeech }
+  return { isListening, isSpeaking, sttError, startListening, stopListening, speak, cancelSpeech }
 }

@@ -15,7 +15,7 @@ const STATE_LABEL: Record<OrbState, string> = {
 export default function App() {
   const { messages, isThinking, sendMessage } = useHermesWS()
   const {
-    isListening, isSpeaking,
+    isListening, isSpeaking, sttError,
     startListening, stopListening,
     speak, cancelSpeech,
   } = useVoice(sendMessage)
@@ -100,9 +100,11 @@ export default function App() {
         <div className="hud-center" />
 
         <div className="hud-bottom">
-          {orbState === 'idle'
-            ? <span className="hud-hint">{STRINGS.hud.tapToSpeak}</span>
-            : <span className={`hud-state ${orbState}`}>{STATE_LABEL[orbState]}</span>
+          {sttError
+            ? <span className="hud-error">STT: {sttError}</span>
+            : orbState === 'idle'
+              ? <span className="hud-hint">{STRINGS.hud.tapToSpeak}</span>
+              : <span className={`hud-state ${orbState}`}>{STATE_LABEL[orbState]}</span>
           }
         </div>
       </div>
