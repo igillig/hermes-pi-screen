@@ -31,48 +31,65 @@ declare global {
   }
 }
 
-const OPENAI_TTS_URL = 'https://api.openai.com/v1/audio/speech'
 const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY as string | undefined
+const OPENAI_STT_URL = 'https://api.openai.com/v1/audio/transcriptions'
+const OPENAI_TTS_URL = 'https://api.openai.com/v1/audio/speech'
 
 export function useVoice(onFinalTranscript: (text: string) => void) {
   const [isListening, setIsListening] = useState(false)
   const [isSpeaking, setIsSpeaking]   = useState(false)
   const [sttError, setSttError]       = useState('')
 
-  const recognitionRef = useRef<InstanceType<typeof SpeechRecognition> | null>(null)
-  const audioRef       = useRef<HTMLAudioElement | null>(null)
-  const onFinalRef     = useRef(onFinalTranscript)
+  const recorderRef  = useRef<MediaRecorder | null>(null)
+  const chunksRef    = useRef<Blob[]>([])
+  const audioRef     = useRef<HTMLAudioElement | null>(null)
+  const onFinalRef   = useRef(onFinalTranscript)
 
   useEffect(() => { onFinalRef.current = onFinalTranscript }, [onFinalTranscript])
 
-  const startListening = useCallback(() => {
-    const SR = window.SpeechRecognition ?? window.webkitSpeechRecognition
-    if (!SR) return
+  const startListening = useCallback(async () => {
+    setSttError('')
+    try {
+      const stream   = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new MediaRecorder(stream)
+      chunksRef.current = []
 
-    const rec = new SR()
-    rec.lang           = VOICE_LOCALE
-    rec.interimResults = false
-    rec.maxAlternatives = 1
-    rec.continuous     = false
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
 
-    rec.onresult = (event: SpeechRecognitionEvent) => {
-      const text = event.results[event.resultIndex][0].transcript.trim()
-      if (text) onFinalRef.current(text)
-    }
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop())
+        setIsListening(false)
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
+        try {
+          const form = new FormData()
+          form.append('file', blob, 'audio.webm')
+          form.append('model', 'whisper-1')
+          form.append('language', 'es')
+          const res  = await fetch(OPENAI_STT_URL, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+            body: form,
+          })
+          const { text } = await res.json() as { text: string }
+          if (text?.trim()) onFinalRef.current(text.trim())
+        } catch (err) {
+          setSttError('whisper-error')
+          console.warn('STT error:', err)
+        }
+      }
 
-    rec.onend   = () => setIsListening(false)
-    rec.onerror = (e: SpeechRecognitionErrorEvent) => {
-      if (e.error !== 'no-speech' && e.error !== 'aborted') setSttError(e.error)
+      recorderRef.current = recorder
+      recorder.start()
+      setIsListening(true)
+    } catch (err) {
+      setSttError('mic-error')
+      console.warn('Mic error:', err)
       setIsListening(false)
     }
-
-    recognitionRef.current = rec
-    try { rec.start(); setIsListening(true) } catch { setIsListening(false) }
   }, [])
 
   const stopListening = useCallback(() => {
-    recognitionRef.current?.stop()
-    setIsListening(false)
+    recorderRef.current?.stop()
   }, [])
 
   const speak = useCallback(async (text: string, onEnd?: () => void) => {

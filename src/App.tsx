@@ -30,7 +30,7 @@ export default function App() {
 
   const triggerVoice = () => {
     voiceLoop.current = true
-    startListening()
+    startListening().catch(() => {})
   }
 
   const { enableWakeWord } = useWakeWord('eu parche', triggerVoice)
@@ -43,7 +43,7 @@ export default function App() {
     lastSpoken.current = last.id
 
     speak(last.content, () => {
-      if (voiceLoop.current) setTimeout(startListening, 400)
+      if (voiceLoop.current) setTimeout(() => startListening().catch(() => {}), 400)
     })
   }, [messages, speak, startListening])
 
@@ -65,7 +65,7 @@ export default function App() {
     } else if (isSpeaking) {
       cancelSpeech()
       voiceLoop.current = true
-      setTimeout(startListening, 200)
+      setTimeout(() => startListening().catch(() => {}), 200)
     } else if (isThinking) {
       // noop — WS streaming no es cancelable desde el cliente
     } else {
