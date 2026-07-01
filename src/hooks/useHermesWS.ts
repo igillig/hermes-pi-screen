@@ -22,11 +22,13 @@ export function useHermesWS() {
   const [messages, setMessages]   = useState<ChatMessage[]>([])
   const [isThinking, setIsThinking] = useState(false)
 
-  const ws            = useRef<WebSocket | null>(null)
-  const msgId         = useRef(1)
+  const ws             = useRef<WebSocket | null>(null)
+  const msgId          = useRef(1)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>()
-  const pendingId     = useRef<string | null>(null)
-  const accumulated   = useRef('')
+  const pendingId      = useRef<string | null>(null)
+  const accumulated    = useRef('')
+  const sessionReady   = useRef(false)
+  const sessionId      = useRef<string | null>(null)
 
   const connect = useCallback(() => {
     if (ws.current?.readyState === WebSocket.OPEN) return
@@ -36,6 +38,8 @@ export function useHermesWS() {
 
     socket.onclose = () => {
       ws.current = null
+      sessionReady.current = false
+      sessionId.current = null
       reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY_MS)
     }
 
@@ -54,67 +58,59 @@ export function useHermesWS() {
 
   const handleMessage = (msg: WsMessage) => {
     const method = msg.method
+    const type   = msg.params?.type as string | undefined
 
-    // Streaming delta — accumulate text
-    if (method === 'conversation.message.delta') {
-      const content = msg.params?.content
-      let chunk = ''
-      if (Array.isArray(content)) {
-        chunk = content.map((c: unknown) => (c as { text?: string }).text ?? '').join('')
-      } else if (typeof content === 'string') {
-        chunk = content
-      }
+    // Gateway ready → create session
+    if (method === 'event' && type === 'gateway.ready') {
+      ws.current?.send(JSON.stringify({ id: 0, method: 'session.create', params: { title: 'parche-ui' } }) + '\n')
+      return
+    }
+
+    // Session created → store session_id and allow sending messages
+    if (msg.id === 0 && msg.result) {
+      const r = msg.result as Record<string, unknown>
+      sessionId.current = (r.session_id as string) ?? null
+      sessionReady.current = true
+      return
+    }
+
+    if (method !== 'event') return
+
+    // Internal reasoning — ignore
+    if (type === 'thinking.delta' || type === 'reasoning.delta') return
+
+    // Response text chunk
+    if (type === 'message.delta') {
+      const chunk = (msg.params?.payload as { text?: string })?.text ?? ''
       if (!chunk) return
 
       accumulated.current += chunk
+      const snap = accumulated.current
+
+      if (!pendingId.current) pendingId.current = `hermes-${Date.now()}`
+      const id = pendingId.current
 
       setMessages(prev => {
-        const snap = accumulated.current
-        if (!pendingId.current) {
-          const id = `hermes-${Date.now()}`
-          pendingId.current = id
+        if (!prev.some(m => m.id === id))
           return [...prev, { id, role: 'hermes', content: snap, timestamp: Date.now(), pending: true }]
-        }
-        return prev.map(m => m.id === pendingId.current ? { ...m, content: snap } : m)
+        return prev.map(m => m.id === id ? { ...m, content: snap } : m)
       })
       return
     }
 
-    // Response complete
-    if (method === 'conversation.message.complete') {
-      setMessages(prev =>
-        prev.map(m => m.id === pendingId.current ? { ...m, pending: false } : m)
-      )
+    // Response complete — use payload.text as canonical content
+    if (type === 'message.complete') {
+      const finalText = (msg.params?.payload as { text?: string })?.text ?? accumulated.current
+      const id = pendingId.current ?? `hermes-${Date.now()}`
+
+      setMessages(prev => {
+        if (!prev.some(m => m.id === id))
+          return [...prev, { id, role: 'hermes', content: finalText, timestamp: Date.now(), pending: false }]
+        return prev.map(m => m.id === id ? { ...m, content: finalText, pending: false } : m)
+      })
       pendingId.current = null
       accumulated.current = ''
       setIsThinking(false)
-      return
-    }
-
-    // Fallback: old-style result with content+done (keeps backwards compat)
-    if (msg.result && typeof msg.result === 'object') {
-      const r = msg.result as Record<string, unknown>
-      const content = (r.content ?? r.text ?? '') as string
-      const done = r.done !== false
-      if (!content && !done) return
-
-      accumulated.current += content
-      const snap = accumulated.current
-
-      setMessages(prev => {
-        if (!pendingId.current) {
-          const id = `hermes-${msg.id ?? Date.now()}`
-          pendingId.current = id
-          return [...prev, { id, role: 'hermes', content: snap, timestamp: Date.now(), pending: !done }]
-        }
-        return prev.map(m => m.id === pendingId.current ? { ...m, content: snap, pending: !done } : m)
-      })
-
-      if (done) {
-        pendingId.current = null
-        accumulated.current = ''
-        setIsThinking(false)
-      }
     }
   }
 
@@ -128,7 +124,7 @@ export function useHermesWS() {
 
   const sendMessage = useCallback((content: string) => {
     const trimmed = content.trim()
-    if (!trimmed || !ws.current || ws.current.readyState !== WebSocket.OPEN) return
+    if (!trimmed || !ws.current || ws.current.readyState !== WebSocket.OPEN || !sessionReady.current) return
 
     const id = msgId.current++
     setMessages(prev => [...prev, { id: `user-${id}`, role: 'user', content: trimmed, timestamp: Date.now() }])
@@ -136,7 +132,7 @@ export function useHermesWS() {
     accumulated.current = ''
     pendingId.current = null
 
-    ws.current.send(JSON.stringify({ id, method: 'prompt.submit', params: { content: trimmed } }) + '\n')
+    ws.current.send(JSON.stringify({ id, method: 'prompt.submit', params: { content: trimmed, session_id: sessionId.current } }) + '\n')
   }, [])
 
   return { messages, isThinking, sendMessage }
