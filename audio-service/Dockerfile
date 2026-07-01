@@ -18,17 +18,17 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download Whisper model so first request isn't slow
-ARG WHISPER_MODEL=small
+ARG WHISPER_MODEL=tiny
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL}', device='cpu', compute_type='int8')"
 
-# Download Piper voice model
-ARG PIPER_VOICE=es_ES-davefx-medium
+# Download Piper voice model (es_MX-ald-medium: neutral Latin American Spanish)
+ARG PIPER_VOICE=es_MX-ald-medium
 RUN mkdir -p /app/models && \
     curl -fsSL \
-      "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/${PIPER_VOICE}.onnx" \
+      "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/ald/medium/${PIPER_VOICE}.onnx" \
       -o "/app/models/${PIPER_VOICE}.onnx" && \
     curl -fsSL \
-      "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/${PIPER_VOICE}.onnx.json" \
+      "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/ald/medium/${PIPER_VOICE}.onnx.json" \
       -o "/app/models/${PIPER_VOICE}.onnx.json"
 
 COPY main.py .
