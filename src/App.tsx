@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import NeuralOrb, { type OrbState } from './components/NeuralOrb'
 import { useHermesAPI } from './hooks/useHermesAPI'
 import { useVoice } from './hooks/useVoice'
+import { useWakeWord } from './hooks/useWakeWord'
 import { STRINGS } from './i18n/strings'
 
 const STATE_LABEL: Record<OrbState, string> = {
@@ -22,34 +23,48 @@ export default function App() {
   const [time, setTime] = useState(() => new Date())
   useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t) }, [])
 
-  const voiceLoop  = useRef(false)
-  const lastSpoken = useRef<string | null>(null)
+  const voiceLoop    = useRef(false)
+  const lastSpoken   = useRef<string | null>(null)
+  const [everTapped, setEverTapped] = useState(false)
+
+  const triggerVoice = () => {
+    voiceLoop.current = true
+    startListening().catch(err => console.warn('startListening:', err))
+  }
+
+  const { enableWakeWord } = useWakeWord('eu parche', triggerVoice)
 
   // After Hermes responds → speak → re-listen if in voice loop
   useEffect(() => {
     const last = messages.at(-1)
-    if (!last || last.role !== 'hermes' || last.pending) return
+    if (!last || last.role !== 'hermes' || last.pending || last.isError) return
     if (last.id === lastSpoken.current) return
     lastSpoken.current = last.id
 
     speak(last.content, () => {
-      if (voiceLoop.current) setTimeout(startListening, 400)
+      if (voiceLoop.current) setTimeout(() => startListening().catch(() => {}), 400)
     })
   }, [messages, speak, startListening])
 
+  const isActive = isListening || isSpeaking || isThinking
+
+  // Wake word listens only when idle and after the first tap (browser mic permission)
+  useEffect(() => { enableWakeWord(everTapped && !isActive) }, [everTapped, isActive, enableWakeWord])
+
   const handleTap = () => {
+    if (!everTapped) setEverTapped(true)
+
     if (isListening) {
       voiceLoop.current = false
       stopListening()
     } else if (isSpeaking) {
       cancelSpeech()
       voiceLoop.current = true
-      setTimeout(startListening, 200)
+      setTimeout(() => startListening().catch(() => {}), 200)
     } else if (isThinking) {
       cancelStream()
     } else {
-      voiceLoop.current = true
-      startListening()
+      triggerVoice()
     }
   }
 

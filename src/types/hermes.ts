@@ -26,6 +26,7 @@ export interface ChatMessage {
   content: string
   timestamp: number
   pending?: boolean
+  isError?: boolean
 }
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error'

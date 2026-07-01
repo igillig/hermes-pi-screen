@@ -125,7 +125,7 @@ export function useHermesAPI() {
       setMessages(prev =>
         prev.map(m =>
           m.id === hermesMsg.id
-            ? { ...m, content: `Error: ${(err as Error).message}`, pending: false }
+            ? { ...m, content: `Error: ${(err as Error).message}`, pending: false, isError: true }
             : m,
         ),
       )

@@ -31,6 +31,16 @@ services:
       - default
       - hermes
 
+  audio-service:
+    build:
+      context: audio-service
+      dockerfile: Dockerfile
+    image: audio-service:latest
+    container_name: audio-service
+    restart: unless-stopped
+    networks:
+      - default
+
 networks:
   # The network Hermes already runs on (created by its own compose project).
   hermes:
