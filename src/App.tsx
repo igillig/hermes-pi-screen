@@ -25,6 +25,7 @@ export default function App() {
 
   const voiceLoop    = useRef(false)
   const lastSpoken   = useRef<string | null>(null)
+  const lastTap      = useRef(0)
   const [everTapped, setEverTapped] = useState(false)
 
   const triggerVoice = () => {
@@ -52,6 +53,10 @@ export default function App() {
   useEffect(() => { enableWakeWord(everTapped && !isActive) }, [everTapped, isActive, enableWakeWord])
 
   const handleTap = () => {
+    const now = Date.now()
+    if (now - lastTap.current < 500) return
+    lastTap.current = now
+
     if (!everTapped) setEverTapped(true)
 
     if (isListening) {
