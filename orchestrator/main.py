@@ -8,13 +8,15 @@ a small WebSocket server so the orb can react in real time.
 """
 
 import asyncio
+import audioop
 import io
 import json
 import logging
 import os
 import re
 import wave
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import closing
 
 import httpx
 import numpy as np
@@ -60,7 +62,6 @@ OWW_CHUNK_SAMPLES = int(os.getenv("OWW_CHUNK_SAMPLES", "1280"))  # 80ms, openWak
 
 VAD_AGGRESSIVENESS = int(os.getenv("VAD_AGGRESSIVENESS", "2"))
 FRAME_MS = 30
-FRAME_SAMPLES = MIC_SAMPLE_RATE * FRAME_MS // 1000
 SPEECH_START_FRAMES = int(os.getenv("SPEECH_START_FRAMES", "3"))   # ~90ms of voice to trigger
 SPEECH_END_FRAMES = int(os.getenv("SPEECH_END_FRAMES", "20"))      # ~600ms of silence to cut
 MIN_UTTERANCE_MS = int(os.getenv("MIN_UTTERANCE_MS", "250"))
@@ -112,18 +113,52 @@ async def set_status(status: str) -> None:
         clients.discard(ws)
 
 
+# ── Audio device helpers ─────────────────────────────────────────────────────
+# Real mic/speaker hardware often refuses to open at an arbitrary rate
+# (PortAudio "Invalid sample rate" — common with USB audio that only supports
+# its own native rate, e.g. 44100). Instead of guessing MIC_SAMPLE_RATE per
+# device, we always open the stream at whatever rate the device reports as its
+# default, then resample in software with the stdlib `audioop` (no extra deps,
+# works directly on 16-bit mono PCM).
+
+def _query_native_rate(device: str | int | None, kind: str) -> int:
+    info = sd.query_devices(device, kind) if device is not None else sd.query_devices(kind=kind)
+    return int(info["default_samplerate"])
+
+
+def _frames_at_rate(device: str | int | None, target_rate: int, frame_ms: int) -> Iterator[bytes]:
+    """Yields fixed-size `frame_ms`-long PCM16 mono chunks at `target_rate`,
+    resampling on the fly from the mic's native rate."""
+    native_rate = _query_native_rate(device, "input")
+    native_frame_samples = max(1, native_rate * frame_ms // 1000)
+    frame_bytes = target_rate * frame_ms // 1000 * 2
+
+    buffer = b""
+    state = None
+    with sd.InputStream(
+        samplerate=native_rate, channels=1, dtype="int16",
+        blocksize=native_frame_samples, device=device,
+    ) as stream:
+        while True:
+            data, _ = stream.read(native_frame_samples)
+            chunk = data.tobytes()
+            if native_rate != target_rate:
+                chunk, state = audioop.ratecv(chunk, 2, 1, native_rate, target_rate, state)
+            buffer += chunk
+            while len(buffer) >= frame_bytes:
+                yield buffer[:frame_bytes]
+                buffer = buffer[frame_bytes:]
+
+
 # ── Wake word (blocking, runs in a worker thread) ───────────────────────────
 
 def wait_for_wake_word() -> None:
     """Blocks until "che parche" is detected."""
     wakeword_model.reset()
-    with sd.InputStream(
-        samplerate=OWW_SAMPLE_RATE, channels=1, dtype="int16",
-        blocksize=OWW_CHUNK_SAMPLES, device=MIC_DEVICE,
-    ) as stream:
-        while True:
-            data, _ = stream.read(OWW_CHUNK_SAMPLES)
-            pcm = data.reshape(-1)
+    frame_ms = OWW_CHUNK_SAMPLES * 1000 // OWW_SAMPLE_RATE
+    with closing(_frames_at_rate(MIC_DEVICE, OWW_SAMPLE_RATE, frame_ms)) as frames:
+        for frame in frames:
+            pcm = np.frombuffer(frame, dtype=np.int16)
             scores = wakeword_model.predict(pcm)
             if any(score >= OWW_THRESHOLD for score in scores.values()):
                 return
@@ -139,13 +174,8 @@ def capture_utterance() -> bytes | None:
     num_silence = 0
     voiced_frames: list[bytes] = []
 
-    with sd.InputStream(
-        samplerate=MIC_SAMPLE_RATE, channels=1, dtype="int16",
-        blocksize=FRAME_SAMPLES, device=MIC_DEVICE,
-    ) as stream:
-        while True:
-            data, _ = stream.read(FRAME_SAMPLES)
-            frame = data.tobytes()
+    with closing(_frames_at_rate(MIC_DEVICE, MIC_SAMPLE_RATE, FRAME_MS)) as frames:
+        for frame in frames:
             is_speech = vad.is_speech(frame, MIC_SAMPLE_RATE)
 
             if not triggered:
@@ -259,8 +289,11 @@ async def synthesize(text: str) -> bytes:
 def _play_pcm_sync(pcm: bytes) -> None:
     if not pcm:
         return
+    native_rate = _query_native_rate(SPEAKER_DEVICE, "output")
+    if native_rate != TTS_SAMPLE_RATE:
+        pcm, _ = audioop.ratecv(pcm, 2, 1, TTS_SAMPLE_RATE, native_rate, None)
     audio = np.frombuffer(pcm, dtype=np.int16)
-    sd.play(audio, samplerate=TTS_SAMPLE_RATE, device=SPEAKER_DEVICE)
+    sd.play(audio, samplerate=native_rate, device=SPEAKER_DEVICE)
     sd.wait()
 
 
