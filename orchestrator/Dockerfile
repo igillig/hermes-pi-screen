@@ -15,6 +15,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
+# Routes the ALSA "default" PCM to the correct card/devices for this Pi's
+# hardware (see the file for details, and how to update it if the card index
+# changes).
+COPY asound.conf /etc/asound.conf
 
 EXPOSE 8765
 CMD ["python", "main.py"]

@@ -39,6 +39,7 @@ src/
 orchestrator/
 ├── main.py                       # Voice orchestrator: wake word → VAD → Whisper → Hermes → TTS → speakers
 ├── Dockerfile                    # PortAudio/ALSA + Python deps
+├── asound.conf                   # Pins ALSA "default" to the right mic/speaker hardware (card index is Pi-specific!)
 ├── requirements.txt
 └── models/                       # Drop trained wake-word .onnx files here (bind-mounted, gitignored)
 Dockerfile                        # Multi-stage build (node → nginx), UI
