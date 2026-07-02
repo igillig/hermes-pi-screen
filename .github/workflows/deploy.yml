@@ -39,7 +39,7 @@ jobs:
           echo "VITE_HERMES_API_URL=${{ vars.VITE_HERMES_API_URL }}" > .env
           echo "VITE_ORCHESTRATOR_WS_URL=${{ vars.VITE_ORCHESTRATOR_WS_URL }}" >> .env
           echo "HERMES_API_KEY=${{ secrets.HERMES_API_KEY }}" >> .env
-          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+          echo "OPENAI_API_KEY=${{ secrets.VITE_OPENAI_API_KEY }}" >> .env
           echo "WAKE_WORD_ENABLED=${{ vars.WAKE_WORD_ENABLED }}" >> .env
           echo "HOST_PORT=${{ vars.HOST_PORT }}" >> .env
 
