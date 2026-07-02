@@ -286,15 +286,34 @@ async def synthesize(text: str) -> bytes:
         return b""
 
 
+# Some hardware (HDMI/certain USB DACs) won't open int16 output streams
+# directly ("Sample format not supported") — remembered per device so we don't
+# retry-and-catch on every single sentence once we know which format works.
+_output_dtype_cache: dict[str | int | None, str] = {}
+
+
 def _play_pcm_sync(pcm: bytes) -> None:
     if not pcm:
         return
     native_rate = _query_native_rate(SPEAKER_DEVICE, "output")
     if native_rate != TTS_SAMPLE_RATE:
         pcm, _ = audioop.ratecv(pcm, 2, 1, TTS_SAMPLE_RATE, native_rate, None)
-    audio = np.frombuffer(pcm, dtype=np.int16)
-    sd.play(audio, samplerate=native_rate, device=SPEAKER_DEVICE)
-    sd.wait()
+
+    int16_audio = np.frombuffer(pcm, dtype=np.int16)
+    dtype = _output_dtype_cache.get(SPEAKER_DEVICE, "int16")
+    audio = int16_audio if dtype == "int16" else int16_audio.astype(np.float32) / 32768.0
+
+    try:
+        sd.play(audio, samplerate=native_rate, device=SPEAKER_DEVICE)
+        sd.wait()
+    except sd.PortAudioError as e:
+        if dtype != "int16" or "Sample format" not in str(e):
+            raise
+        log.warning("output device rejected int16, falling back to float32")
+        _output_dtype_cache[SPEAKER_DEVICE] = "float32"
+        audio = int16_audio.astype(np.float32) / 32768.0
+        sd.play(audio, samplerate=native_rate, device=SPEAKER_DEVICE)
+        sd.wait()
 
 
 async def fill_tts_future(sentence: str, future: asyncio.Future) -> None:
