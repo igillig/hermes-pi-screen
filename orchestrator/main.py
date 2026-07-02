@@ -286,10 +286,32 @@ async def synthesize(text: str) -> bytes:
         return b""
 
 
-# Some hardware (HDMI/certain USB DACs) won't open int16 output streams
-# directly ("Sample format not supported") — remembered per device so we don't
-# retry-and-catch on every single sentence once we know which format works.
-_output_dtype_cache: dict[str | int | None, str] = {}
+# Some hardware (HDMI/certain USB DACs) rejects our mono TTS audio outright —
+# either the sample format or (more often) mono itself isn't supported, both
+# surfacing as PortAudio "Sample format not supported". Rather than guess
+# which, try a short list of (channels, dtype) configs and remember whichever
+# one works per device, so later calls skip straight to it.
+_PLAYBACK_CONFIGS: list[tuple[int, str]] = [
+    (1, "int16"),
+    (2, "int16"),
+    (1, "float32"),
+    (2, "float32"),
+    (2, "int32"),
+]
+
+_output_config_cache: dict[str | int | None, tuple[int, str]] = {}
+
+
+def _prepare_output_audio(int16_mono: np.ndarray, channels: int, dtype: str) -> np.ndarray:
+    if dtype == "int16":
+        data = int16_mono
+    elif dtype == "float32":
+        data = int16_mono.astype(np.float32) / 32768.0
+    elif dtype == "int32":
+        data = int16_mono.astype(np.int32) << 16
+    else:
+        raise ValueError(f"unsupported playback dtype: {dtype}")
+    return np.column_stack([data, data]) if channels == 2 else data
 
 
 def _play_pcm_sync(pcm: bytes) -> None:
@@ -298,22 +320,24 @@ def _play_pcm_sync(pcm: bytes) -> None:
     native_rate = _query_native_rate(SPEAKER_DEVICE, "output")
     if native_rate != TTS_SAMPLE_RATE:
         pcm, _ = audioop.ratecv(pcm, 2, 1, TTS_SAMPLE_RATE, native_rate, None)
+    int16_mono = np.frombuffer(pcm, dtype=np.int16)
 
-    int16_audio = np.frombuffer(pcm, dtype=np.int16)
-    dtype = _output_dtype_cache.get(SPEAKER_DEVICE, "int16")
-    audio = int16_audio if dtype == "int16" else int16_audio.astype(np.float32) / 32768.0
+    cached = _output_config_cache.get(SPEAKER_DEVICE)
+    candidates = [cached] if cached else _PLAYBACK_CONFIGS
 
-    try:
-        sd.play(audio, samplerate=native_rate, device=SPEAKER_DEVICE)
-        sd.wait()
-    except sd.PortAudioError as e:
-        if dtype != "int16" or "Sample format" not in str(e):
-            raise
-        log.warning("output device rejected int16, falling back to float32")
-        _output_dtype_cache[SPEAKER_DEVICE] = "float32"
-        audio = int16_audio.astype(np.float32) / 32768.0
-        sd.play(audio, samplerate=native_rate, device=SPEAKER_DEVICE)
-        sd.wait()
+    last_err: Exception | None = None
+    for channels, dtype in candidates:
+        audio = _prepare_output_audio(int16_mono, channels, dtype)
+        try:
+            sd.play(audio, samplerate=native_rate, device=SPEAKER_DEVICE)
+            sd.wait()
+            _output_config_cache[SPEAKER_DEVICE] = (channels, dtype)
+            return
+        except sd.PortAudioError as e:
+            last_err = e
+            log.warning("playback config channels=%d dtype=%s rejected: %s", channels, dtype, e)
+
+    raise last_err
 
 
 async def fill_tts_future(sentence: str, future: asyncio.Future) -> None:
