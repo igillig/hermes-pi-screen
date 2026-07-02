@@ -4,13 +4,15 @@
 shows the assistant's current state (listening / thinking / talking).
 
 The UI is a **pure status display** — it owns no microphone, speaker, or chat
-logic. All of that (mic capture + VAD, OpenAI Whisper STT, streaming Hermes
-chat, sentence-buffered OpenAI TTS, and speaker playback) lives in
-[`orchestrator/main.py`](orchestrator/main.py), a Python script that runs
-directly on the Raspberry Pi host (it needs real audio hardware access, so it
-isn't containerized like the UI). The orchestrator pushes
-`{"status": "listening" | "thinking" | "talking"}` over a small WebSocket
-server that this UI connects to and mirrors onto the orb.
+logic. All of that (wake word, mic capture + VAD, OpenAI Whisper STT, streaming
+Hermes chat, sentence-buffered OpenAI TTS, and speaker playback) lives in
+[`orchestrator/main.py`](orchestrator/main.py), which runs as its own container
+(`orchestrator` service in `stack.yml`) with `/dev/snd` passed through for real
+mic/speaker access. The orchestrator pushes
+`{"status": "idle" | "listening" | "thinking" | "talking"}` over a small
+WebSocket server that this UI connects to and mirrors onto the orb.
+`docker compose -f stack.yml up -d` (or a push to `main`, see below) brings up
+both containers together.
 
 Built with **Vite + React + TypeScript** and served in production by **nginx**
 inside a Docker container, designed to run on a Raspberry Pi via Portainer.
@@ -35,11 +37,13 @@ src/
 └── hooks/
     └── useOrchestratorStatus.ts  # WebSocket listener for the Python orchestrator's status
 orchestrator/
-├── main.py                       # Voice orchestrator: mic/VAD → Whisper → Hermes → TTS → speakers
-└── requirements.txt
-Dockerfile                        # Multi-stage build (node → nginx), UI only
+├── main.py                       # Voice orchestrator: wake word → VAD → Whisper → Hermes → TTS → speakers
+├── Dockerfile                    # PortAudio/ALSA + Python deps
+├── requirements.txt
+└── models/                       # Drop trained wake-word .onnx files here (bind-mounted, gitignored)
+Dockerfile                        # Multi-stage build (node → nginx), UI
 nginx.conf                        # nginx template: SPA + static caching + /api reverse proxy
-stack.yml                         # Portainer / docker-compose stack (UI only)
+stack.yml                         # Portainer / docker-compose stack — both parche-ui and orchestrator
 ```
 
 ### Architecture / API access
@@ -69,17 +73,21 @@ values there (or wire in a full i18n library later).
 ## Environment variables
 
 > ⚠️ `VITE_*` variables are **inlined by Vite at build time** (not read at
-> runtime). Non-`VITE_` variables (`HERMES_API_KEY`, `HOST_PORT`) are plain
-> **runtime** env for the container.
+> runtime). Everything else is plain **runtime** env, read by `docker compose`
+> from the root `.env` and passed into whichever container declares it.
 
-| Variable                   | Scope      | Required | Description                                                                 |
-| -------------------------- | ---------- | -------- | ---------------------------------------------------------------------------- |
-| `HERMES_API_KEY`           | runtime    | Yes      | Injected by nginx into the `Authorization` header. Never shipped to the client. |
-| `HOST_PORT`                | runtime    | No       | Host port the UI is published on. Default: `8080`.                          |
-| `VITE_HERMES_API_URL`      | build-time | No       | API base URL baked into the bundle. Default: `/api` (same-origin proxy).    |
-| `VITE_ORCHESTRATOR_WS_URL` | build-time | No       | WebSocket URL for the Python orchestrator's status broadcasts. Default: `ws://<hostname>:8765`. |
+| Variable                   | Scope      | Container      | Required | Description                                                                 |
+| -------------------------- | ---------- | -------------- | -------- | ---------------------------------------------------------------------------- |
+| `HERMES_API_KEY`           | runtime    | both           | Yes      | UI: injected by nginx into `Authorization`. Orchestrator: used to call Hermes directly. Never shipped to the browser. |
+| `OPENAI_API_KEY`           | runtime    | orchestrator   | Yes      | Whisper STT + TTS.                                                          |
+| `HOST_PORT`                | runtime    | parche-ui      | No       | Host port the UI is published on. Default: `8080`.                          |
+| `VITE_HERMES_API_URL`      | build-time | parche-ui      | No       | API base URL baked into the bundle. Default: `/api` (same-origin proxy).    |
+| `VITE_ORCHESTRATOR_WS_URL` | build-time | parche-ui      | No       | WebSocket URL for the orchestrator's status broadcasts. Default: `ws://<hostname>:8765`. |
+| `WAKE_WORD_ENABLED`        | runtime    | orchestrator   | No       | `false` by default — permanent VAD-only listening until the wake-word model is trained. |
+| `OWW_MODEL_PATH`           | runtime    | orchestrator   | Only if wake word enabled | Path to the trained `.onnx` inside the container; defaults to `/app/models/che_parche.onnx` (bind-mounted from `orchestrator/models/`). |
+| `OWW_THRESHOLD`            | runtime    | orchestrator   | No       | Detection score threshold, default `0.5`.                                   |
 
-See `orchestrator/.env.example` for the orchestrator's own configuration (OpenAI key, Hermes API URL, audio devices, VAD tuning).
+See `orchestrator/.env.example` for the full list (VAD tuning, audio device selection, wake-word training steps) and for running `main.py` directly outside Docker.
 
 Copy `.env.example` to `.env` and fill in the values:
 
@@ -113,11 +121,12 @@ VITE_HERMES_API_URL=http://192.168.1.xxx:8000
 
 ## Deployment on Raspberry Pi
 
-The stack builds the image on the Raspberry itself and serves it with nginx on
-port `8080` (configurable via `HOST_PORT`). nginx reverse-proxies `/api` to the
-Hermes container, so the only value you must provide is the runtime
-`HERMES_API_KEY`. parche-ui joins the external `hermes-agent_default` network
-(where Hermes runs), so it must already exist on the host.
+`stack.yml` builds and runs **two** containers: `parche-ui` (nginx on port
+`8080`, configurable via `HOST_PORT`) and `orchestrator` (voice, with `/dev/snd`
+passed through so it can reach the Pi's real mic/speakers). Both join the
+external `hermes-agent_default` network (where Hermes runs), so it must already
+exist on the host. `docker compose -f stack.yml up -d` brings up both together
+— there's no separate step for the orchestrator.
 
 All deployment methods below use the same `stack.yml`. Pick whichever you
 prefer — there is no functional difference.
@@ -130,10 +139,11 @@ prefer — there is no functional difference.
    - **Web editor**: paste the contents of `stack.yml`.
 3. Under **Environment variables**, add:
 
-   | Name             | Value             |
-   | ---------------- | ----------------- |
-   | `HERMES_API_KEY` | `your-api-key`    |
-   | `HOST_PORT`      | `8080` (optional) |
+   | Name              | Value             |
+   | ----------------- | ----------------- |
+   | `HERMES_API_KEY`  | `your-api-key`    |
+   | `OPENAI_API_KEY`  | `your-openai-key` |
+   | `HOST_PORT`       | `8080` (optional) |
 
 4. **Deploy the stack**.
 5. Open the UI at `http://<raspberry-ip>:8080`.
@@ -142,39 +152,45 @@ prefer — there is no functional difference.
 
 ```bash
 # On the Raspberry, from the project directory:
-cp .env.example .env        # then set HERMES_API_KEY (and HOST_PORT if needed)
+cp .env.example .env        # then set HERMES_API_KEY, OPENAI_API_KEY (and HOST_PORT if needed)
 docker compose -f stack.yml up -d --build
 ```
 
-`docker compose` reads `HERMES_API_KEY` and `HOST_PORT` from the `.env` file in
-the same directory.
+`docker compose` reads all of these from the `.env` file in the same directory.
 
 ### Option C — GitHub Actions self-hosted runner (CI/CD)
 
 If a self-hosted runner is running on the Pi, every push to `main` builds and
 deploys automatically. The workflow lives in `.github/workflows/deploy.yml`: it
 writes a `.env` from GitHub secrets/variables, then runs `docker compose build`
-+ `up -d` on the runner.
++ `up -d` on the runner — both containers, one push.
 
 One-time setup in the repo **Settings → Secrets and variables → Actions**,
 under the **`production`** environment (matching `environment: production` in the
 workflow):
 
-| Kind     | Name             | Value             |
-| -------- | ---------------- | ----------------- |
-| Secret   | `HERMES_API_KEY` | `your-api-key`    |
-| Variable | `HOST_PORT`      | `8080` (optional) |
+| Kind     | Name               | Value             |
+| -------- | ------------------ | ----------------- |
+| Secret   | `HERMES_API_KEY`   | `your-api-key`    |
+| Secret   | `OPENAI_API_KEY`   | `your-openai-key` |
+| Variable | `HOST_PORT`        | `8080` (optional) |
+| Variable | `WAKE_WORD_ENABLED`| `false` (optional, default false) |
 
 Notes:
 - The runner user must be able to run Docker (e.g. be in the `docker` group) and
   have `docker compose` (v2) available.
+- The runner's user (or whoever `dockerd` runs containers as) needs permission
+  to open `/dev/snd/*` — usually just being in the host's `audio` group.
 - The workflow uses `runs-on: self-hosted`. If your runner needs extra labels to
   be targeted, add them there.
 - You can also trigger it manually via **Actions → Deploy parche-ui → Run workflow**.
+- To enable the wake word later: drop the trained `.onnx` into
+  `orchestrator/models/` on the Pi (or via git), set `WAKE_WORD_ENABLED=true`,
+  and redeploy — no image rebuild needed since the model is bind-mounted.
 
-> The API key is a **runtime** env, so rotating it only needs a restart
-> (`docker compose ... up -d`), not a rebuild. A rebuild is only required if you
-> change build-time `VITE_*` values.
+> Runtime env changes only need a restart (`docker compose ... up -d`), not a
+> rebuild. A rebuild is only required if you change build-time `VITE_*` values
+> or the Dockerfiles themselves.
 
 ### Manual build (no compose)
 
@@ -187,4 +203,15 @@ docker run -d --restart unless-stopped \
   -e HERMES_API_KEY=your-api-key \
   -e NGINX_ENVSUBST_FILTER=HERMES_ \
   --name parche-ui parche-ui:latest
+
+docker build -t parche-orchestrator:latest orchestrator
+
+docker run -d --restart unless-stopped \
+  -p 8765:8765 \
+  --network hermes-agent_default \
+  --device /dev/snd:/dev/snd \
+  -v "$(pwd)/orchestrator/models:/app/models" \
+  -e OPENAI_API_KEY=your-openai-key \
+  -e HERMES_API_KEY=your-api-key \
+  --name parche-orchestrator parche-orchestrator:latest
 ```

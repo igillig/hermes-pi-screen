@@ -3,3 +3,5 @@ dist
 .env.local
 .env
 .vscode
+orchestrator/models/*
+!orchestrator/models/.gitkeep

@@ -6,14 +6,15 @@ name: Deploy parche-ui
 #
 # Required GitHub config (Settings -> Secrets and variables -> Actions),
 # under the "production" environment:
-#   Secrets:   HERMES_API_KEY
+#   Secrets:   HERMES_API_KEY, OPENAI_API_KEY
 #   Variables: HOST_PORT (optional, default 8080)
 #              VITE_HERMES_API_URL (optional, default /api)
 #              VITE_ORCHESTRATOR_WS_URL (optional, default ws://<hostname>:8765)
+#              WAKE_WORD_ENABLED (optional, default false)
 #
-# Voice (mic/STT/Hermes/TTS/speakers) is handled by orchestrator/main.py,
-# which runs directly on the Pi host and is deployed/managed separately from
-# this stack (it needs real audio hardware access, not just a container).
+# Voice (mic/STT/Hermes/TTS/speakers) is handled by orchestrator/main.py, built
+# and deployed as its own container in stack.yml (with /dev/snd passed through
+# for real audio hardware access) — one push/up brings up both containers.
 
 on:
   push:
@@ -38,6 +39,8 @@ jobs:
           echo "VITE_HERMES_API_URL=${{ vars.VITE_HERMES_API_URL }}" > .env
           echo "VITE_ORCHESTRATOR_WS_URL=${{ vars.VITE_ORCHESTRATOR_WS_URL }}" >> .env
           echo "HERMES_API_KEY=${{ secrets.HERMES_API_KEY }}" >> .env
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+          echo "WAKE_WORD_ENABLED=${{ vars.WAKE_WORD_ENABLED }}" >> .env
           echo "HOST_PORT=${{ vars.HOST_PORT }}" >> .env
 
       - name: Build and deploy

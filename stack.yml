@@ -1,14 +1,18 @@
 # ─────────────────────────────────────────────────────────────
-# Portainer / docker-compose stack for parche-ui (HERMES frontend)
+# Portainer / docker-compose stack for parche-ui (HERMES frontend + voice)
 #
-# This is now a pure status display: it builds the image and serves it with
-# nginx, which reverse-proxies /api/* to the Hermes container over the shared
-# docker network (hermes-agent_default). The browser talks same-origin, so no
-# IP or API key is baked into the bundle.
+# parche-ui: pure status display. Builds the image and serves it with nginx,
+# which reverse-proxies /api/* to the Hermes container over the shared docker
+# network (hermes-agent_default). The browser talks same-origin, so no IP or
+# API key is baked into the bundle.
 #
-# Voice (mic/STT/Hermes/TTS/speakers) lives entirely in orchestrator/main.py,
-# which runs directly on the Pi host (not in this stack) for hardware access,
-# and pushes status to the UI over its own WebSocket (VITE_ORCHESTRATOR_WS_URL).
+# orchestrator: owns mic/STT/Hermes/TTS/speakers (orchestrator/main.py). Needs
+# real audio hardware, so /dev/snd is passed through from the Pi host. Talks to
+# Hermes directly over the shared network (no nginx hop) and pushes status to
+# the UI over its own WebSocket (see VITE_ORCHESTRATOR_WS_URL).
+#
+# `docker compose -f stack.yml up -d` brings both up together — one push
+# deploys the whole thing.
 #
 # Works both as a Portainer stack and as `docker compose -f stack.yml ...`
 # over SSH (see README).
@@ -31,6 +35,38 @@ services:
       NGINX_ENVSUBST_FILTER: HERMES_
     ports:
       - "${HOST_PORT:-8080}:80"
+    restart: unless-stopped
+    networks:
+      - default
+      - hermes
+
+  orchestrator:
+    build:
+      context: orchestrator
+      dockerfile: Dockerfile
+    image: parche-orchestrator:latest
+    container_name: parche-orchestrator
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      HERMES_API_URL: ${HERMES_API_URL:-http://hermes_agent:8000}
+      HERMES_API_KEY: ${HERMES_API_KEY}
+      STATUS_WS_HOST: 0.0.0.0
+      STATUS_WS_PORT: 8765
+      STT_LANGUAGE: ${STT_LANGUAGE:-es}
+      TTS_MODEL: ${TTS_MODEL:-tts-1-hd}
+      TTS_VOICE: ${TTS_VOICE:-nova}
+      VAD_AGGRESSIVENESS: ${VAD_AGGRESSIVENESS:-2}
+      # Wake word stays off until a custom model is trained and dropped into
+      # ./orchestrator/models (see orchestrator/.env.example).
+      WAKE_WORD_ENABLED: ${WAKE_WORD_ENABLED:-false}
+      OWW_MODEL_PATH: ${OWW_MODEL_PATH:-/app/models/che_parche.onnx}
+      OWW_THRESHOLD: ${OWW_THRESHOLD:-0.5}
+    volumes:
+      - ./orchestrator/models:/app/models
+    ports:
+      - "8765:8765"
     restart: unless-stopped
     networks:
       - default
