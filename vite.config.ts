@@ -15,11 +15,6 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/api/, ''),
           changeOrigin: true,
         },
-        '/audio': {
-          target: env.VITE_AUDIO_SERVICE_URL ?? 'http://localhost:8001',
-          rewrite: (path) => path.replace(/^\/audio/, ''),
-          changeOrigin: true,
-        },
       },
     },
     build: {

@@ -1,7 +1,16 @@
 # parche-ui
 
-**HERMES** frontend: a holographic-style chat interface (React + Three.js) that
-connects to the Hermes API for streaming conversations, with voice support.
+**HERMES** frontend: a holographic neural-orb display (React + Three.js) that
+shows the assistant's current state (listening / thinking / talking).
+
+The UI is a **pure status display** — it owns no microphone, speaker, or chat
+logic. All of that (mic capture + VAD, OpenAI Whisper STT, streaming Hermes
+chat, sentence-buffered OpenAI TTS, and speaker playback) lives in
+[`orchestrator/main.py`](orchestrator/main.py), a Python script that runs
+directly on the Raspberry Pi host (it needs real audio hardware access, so it
+isn't containerized like the UI). The orchestrator pushes
+`{"status": "listening" | "thinking" | "talking"}` over a small WebSocket
+server that this UI connects to and mirrors onto the orb.
 
 Built with **Vite + React + TypeScript** and served in production by **nginx**
 inside a Docker container, designed to run on a Raspberry Pi via Portainer.
@@ -20,17 +29,17 @@ inside a Docker container, designed to run on a Raspberry Pi via Portainer.
 
 ```
 src/
-├── App.tsx                  # Main composition
-├── i18n/strings.ts          # All user-facing strings (single source for translation)
-├── components/              # Background, orb, messages, input, status
-├── hooks/
-│   ├── useHermesAPI.ts      # HTTP client (SSE streaming) ← in use
-│   ├── useHermesWS.ts       # WebSocket client (legacy / optional)
-│   └── useVoice.ts          # Speech recognition + synthesis
-└── types/hermes.ts
-Dockerfile                   # Multi-stage build (node → nginx)
-nginx.conf                   # nginx template: SPA + static caching + /api reverse proxy
-stack.yml                    # Portainer / docker-compose stack
+├── App.tsx                       # Main composition
+├── i18n/strings.ts               # All user-facing strings (single source for translation)
+├── components/                   # Background, neural orb
+└── hooks/
+    └── useOrchestratorStatus.ts  # WebSocket listener for the Python orchestrator's status
+orchestrator/
+├── main.py                       # Voice orchestrator: mic/VAD → Whisper → Hermes → TTS → speakers
+└── requirements.txt
+Dockerfile                        # Multi-stage build (node → nginx), UI only
+nginx.conf                        # nginx template: SPA + static caching + /api reverse proxy
+stack.yml                         # Portainer / docker-compose stack (UI only)
 ```
 
 ### Architecture / API access
@@ -47,14 +56,13 @@ This means:
   (via `envsubst`, env `HERMES_API_KEY`), so it never ships to the client.
 
 In local development (`npm run dev`) there is no proxy, so you point straight at
-Hermes and the key travels in the bundle (dev only).
+Hermes.
 
 ### Internationalization
 
 All visible text lives in `src/i18n/strings.ts`. Components never hardcode
 user-facing strings — they import from `STRINGS`. To translate the UI, swap the
-values there (or wire in a full i18n library later). The speech recognition /
-synthesis language is configured separately via `VOICE_LOCALE` in the same file.
+values there (or wire in a full i18n library later).
 
 ---
 
@@ -64,13 +72,14 @@ synthesis language is configured separately via `VOICE_LOCALE` in the same file.
 > runtime). Non-`VITE_` variables (`HERMES_API_KEY`, `HOST_PORT`) are plain
 > **runtime** env for the container.
 
-| Variable              | Scope         | Required | Description                                                                 |
-| --------------------- | ------------- | -------- | --------------------------------------------------------------------------- |
-| `HERMES_API_KEY`      | runtime       | Yes      | Injected by nginx into the `Authorization` header. Never shipped to the client. |
-| `HOST_PORT`           | runtime       | No       | Host port the UI is published on. Default: `8080`.                          |
-| `VITE_HERMES_API_URL` | build-time    | No       | API base URL baked into the bundle. Default: `/api` (same-origin proxy).    |
-| `VITE_HERMES_API_KEY` | build-time    | dev only | Only for `npm run dev` without the proxy; ignored in the proxied build.     |
-| `VITE_HERMES_WS_URL`  | build-time    | No       | WebSocket URL (only the unused `useHermesWS` hook). Default: `ws://<host>:9119/api/ws`. |
+| Variable                   | Scope      | Required | Description                                                                 |
+| -------------------------- | ---------- | -------- | ---------------------------------------------------------------------------- |
+| `HERMES_API_KEY`           | runtime    | Yes      | Injected by nginx into the `Authorization` header. Never shipped to the client. |
+| `HOST_PORT`                | runtime    | No       | Host port the UI is published on. Default: `8080`.                          |
+| `VITE_HERMES_API_URL`      | build-time | No       | API base URL baked into the bundle. Default: `/api` (same-origin proxy).    |
+| `VITE_ORCHESTRATOR_WS_URL` | build-time | No       | WebSocket URL for the Python orchestrator's status broadcasts. Default: `ws://<hostname>:8765`. |
+
+See `orchestrator/.env.example` for the orchestrator's own configuration (OpenAI key, Hermes API URL, audio devices, VAD tuning).
 
 Copy `.env.example` to `.env` and fill in the values:
 
@@ -94,12 +103,10 @@ npm run build    # type-check + produce dist/
 npm run preview  # serve the production build locally
 ```
 
-There is no nginx proxy in `vite dev`, so point straight at Hermes in your `.env`
-(the key travels in the bundle — dev only):
+There is no nginx proxy in `vite dev`, so point straight at Hermes in your `.env`:
 
 ```env
 VITE_HERMES_API_URL=http://192.168.1.xxx:8000
-VITE_HERMES_API_KEY=your-api-key
 ```
 
 ---

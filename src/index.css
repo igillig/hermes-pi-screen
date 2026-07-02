@@ -85,17 +85,11 @@ html, body, #root {
 }
 .hud-state.listening { color: #ff3a3a; text-shadow: 0 0 12px rgba(255, 58, 58, 0.6); animation: fadeIn 0.3s ease-out, statePulse 0.7s ease-in-out infinite; }
 .hud-state.thinking  { color: #ffaa00; text-shadow: 0 0 12px rgba(255, 170, 0, 0.6);  animation: fadeIn 0.3s ease-out, statePulse 0.55s ease-in-out infinite; }
-.hud-state.speaking  { color: #00d4ff; text-shadow: 0 0 12px rgba(0, 212, 255, 0.6); }
+.hud-state.talking   { color: #00d4ff; text-shadow: 0 0 12px rgba(0, 212, 255, 0.6); }
 
 .hud-bottom {
   display: flex;
   justify-content: center;
-}
-
-.hud-error {
-  font-size: 9px;
-  letter-spacing: 3px;
-  color: rgba(255, 80, 80, 0.8);
 }
 
 .hud-hint {

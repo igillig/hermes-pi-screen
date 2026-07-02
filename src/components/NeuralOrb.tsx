@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 
-export type OrbState = 'idle' | 'listening' | 'thinking' | 'speaking'
+export type OrbState = 'idle' | 'listening' | 'thinking' | 'talking'
 
 // ─── Shaders ──────────────────────────────────────────────────────────────────
 
@@ -93,7 +93,7 @@ const S: Record<OrbState, Cfg> = {
     pulseRate: 20.0, pulseSpeed: 0.44, maxPulses: 65,
     radius: 1.06, breathAmp: 0.040, breathRate: 1.3, rotY: 0.003, rotX: 0.006,
   },
-  speaking: {
+  talking: {
     color: new THREE.Color(0x00ffcc), glowOp: 0.60, nodeOp: 1.00, connDim: 0.09,
     pulseRate: 9.0, pulseSpeed: 0.38, maxPulses: 30,
     radius: 1.12, breathAmp: 0.085, breathRate: 2.8, rotY: 0.004, rotX: 0.001,
@@ -304,7 +304,7 @@ export default function NeuralOrb({ state }: { state: OrbState }) {
     const wRings: WRing[] = []
     const wGeo   = new THREE.TorusGeometry(0.85, 0.003, 6, 80)
     const wTimer = setInterval(() => {
-      if (stateRef.current !== 'speaking') return
+      if (stateRef.current !== 'talking') return
       const m = new THREE.MeshBasicMaterial({ color: 0x00ffcc, transparent: true, opacity: 0.38, blending: THREE.AdditiveBlending, depthWrite: false })
       const mesh = new THREE.Mesh(wGeo, m)
       mesh.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI)

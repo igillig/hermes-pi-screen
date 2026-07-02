@@ -1,9 +1,14 @@
 # ─────────────────────────────────────────────────────────────
 # Portainer / docker-compose stack for parche-ui (HERMES frontend)
 #
-# Builds the image and serves it with nginx, which reverse-proxies /api/* to
-# the Hermes container over the shared docker network (hermes-agent_default).
-# The browser talks same-origin, so no IP or API key is baked into the bundle.
+# This is now a pure status display: it builds the image and serves it with
+# nginx, which reverse-proxies /api/* to the Hermes container over the shared
+# docker network (hermes-agent_default). The browser talks same-origin, so no
+# IP or API key is baked into the bundle.
+#
+# Voice (mic/STT/Hermes/TTS/speakers) lives entirely in orchestrator/main.py,
+# which runs directly on the Pi host (not in this stack) for hardware access,
+# and pushes status to the UI over its own WebSocket (VITE_ORCHESTRATOR_WS_URL).
 #
 # Works both as a Portainer stack and as `docker compose -f stack.yml ...`
 # over SSH (see README).
@@ -16,9 +21,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_HERMES_API_URL: ${VITE_HERMES_API_URL:-/api}
-        VITE_HERMES_WS_URL: ${VITE_HERMES_WS_URL}
-        VITE_HERMES_INTERNAL_TOKEN: ${VITE_HERMES_INTERNAL_TOKEN}
-        VITE_OPENAI_API_KEY: ${VITE_OPENAI_API_KEY}
+        VITE_ORCHESTRATOR_WS_URL: ${VITE_ORCHESTRATOR_WS_URL}
     image: parche-ui:latest
     container_name: parche-ui
     environment:
@@ -32,18 +35,6 @@ services:
     networks:
       - default
       - hermes
-
-  audio-service:
-    build:
-      context: audio-service
-      dockerfile: Dockerfile
-    image: audio-service:latest
-    container_name: audio-service
-    ports:
-      - "8001:8001"
-    restart: unless-stopped
-    networks:
-      - default
 
 networks:
   # The network Hermes already runs on (created by its own compose project).

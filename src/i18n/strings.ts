@@ -7,52 +7,16 @@
 export const STRINGS = {
   appTitle: 'HERMES',
 
-  // NeuralOrb / HUD overlay states.
+  // NeuralOrb / HUD overlay states — mirrors the orchestrator's status WS.
   orbState: {
     idle: '',
     listening: 'LISTENING',
     thinking: 'THINKING',
-    speaking: 'SPEAKING',
+    talking: 'TALKING',
   },
 
   hud: {
-    tapToSpeak: 'TAP TO SPEAK',
-  },
-
-  inputBar: {
-    voiceStartLabel: 'Speak',
-    voiceStopLabel: 'Stop',
-    voiceStartTitle: 'Tap to speak',
-    voiceStopTitle: 'Tap to stop',
-    placeholderListening: 'Listening...',
-    placeholderSpeaking: 'Hermes is speaking...',
-    placeholderThinking: 'Generating response...',
-    placeholderIdle: 'Type or use the microphone...',
-    send: 'SEND',
-    stop: 'STOP',
-  },
-
-  message: {
-    user: 'USER',
-    hermes: 'HERMES',
-  },
-
-  messageList: {
-    emptyTitle: 'SYSTEM READY',
-    emptySubtitle: 'Type or speak to begin',
-    processingLabel: 'Hermes is processing',
-  },
-
-  status: {
-    online: 'ONLINE',
-    error: 'ERROR',
-    listening: 'LISTENING',
-    processing: 'PROCESSING',
-    responding: 'RESPONDING',
+    connecting: 'CONNECTING...',
+    wakeWordHint: "DECÍ 'CHE PARCHE'",
   },
 } as const
-
-// Speech recognition / synthesis locale (BCP-47).
-// This drives the spoken-language behavior, not the UI text — change it to
-// match the language the user actually speaks to Hermes.
-export const VOICE_LOCALE = 'es-AR'

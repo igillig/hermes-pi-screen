@@ -1,88 +1,19 @@
-import { useEffect, useRef, useState } from 'react'
-import NeuralOrb, { type OrbState } from './components/NeuralOrb'
-import { useHermesWS } from './hooks/useHermesWS'
-import { useVoice } from './hooks/useVoice'
-import { useWakeWord } from './hooks/useWakeWord'
+import { useEffect, useState } from 'react'
+import NeuralOrb from './components/NeuralOrb'
+import { useOrchestratorStatus } from './hooks/useOrchestratorStatus'
 import { STRINGS } from './i18n/strings'
 
-const STATE_LABEL: Record<OrbState, string> = {
-  idle:      STRINGS.orbState.idle,
-  listening: STRINGS.orbState.listening,
-  thinking:  STRINGS.orbState.thinking,
-  speaking:  STRINGS.orbState.speaking,
-}
-
 export default function App() {
-  const { messages, isThinking, sendMessage } = useHermesWS()
-  const {
-    isListening, isSpeaking, sttError,
-    startListening, stopListening,
-    speak, cancelSpeech,
-  } = useVoice(sendMessage)
+  const { status: orbState, connected } = useOrchestratorStatus()
 
   const [time, setTime] = useState(() => new Date())
   useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t) }, [])
-
-  const voiceLoop    = useRef(false)
-  const lastSpoken   = useRef<string | null>(null)
-  const lastTap      = useRef(0)
-  const [everTapped, setEverTapped] = useState(false)
-
-  const triggerVoice = () => {
-    voiceLoop.current = true
-    startListening().catch(() => {})
-  }
-
-  const { enableWakeWord } = useWakeWord('eu parche', triggerVoice)
-
-  // After Hermes responds → speak → re-listen if in voice loop
-  useEffect(() => {
-    const last = messages.at(-1)
-    if (!last || last.role !== 'hermes' || last.pending || last.isError) return
-    if (last.id === lastSpoken.current) return
-    lastSpoken.current = last.id
-
-    speak(last.content, () => {
-      if (voiceLoop.current) setTimeout(() => startListening().catch(() => {}), 400)
-    })
-  }, [messages, speak, startListening])
-
-  const isActive = isListening || isSpeaking || isThinking
-
-  // Wake word listens only when idle and after the first tap (browser mic permission)
-  useEffect(() => { enableWakeWord(everTapped && !isActive) }, [everTapped, isActive, enableWakeWord])
-
-  const handleTap = () => {
-    const now = Date.now()
-    if (now - lastTap.current < 500) return
-    lastTap.current = now
-
-    if (!everTapped) setEverTapped(true)
-
-    if (isListening) {
-      voiceLoop.current = false
-      stopListening()
-    } else if (isSpeaking) {
-      cancelSpeech()
-      voiceLoop.current = true
-      setTimeout(() => startListening().catch(() => {}), 200)
-    } else if (isThinking) {
-      // noop — WS streaming no es cancelable desde el cliente
-    } else {
-      triggerVoice()
-    }
-  }
-
-  const orbState: OrbState = isListening ? 'listening'
-                           : isThinking  ? 'thinking'
-                           : isSpeaking  ? 'speaking'
-                           : 'idle'
 
   const hh = time.getHours().toString().padStart(2, '0')
   const mm = time.getMinutes().toString().padStart(2, '0')
 
   return (
-    <div className="app" onClick={handleTap}>
+    <div className="app">
       <NeuralOrb state={orbState} />
 
       <div className="hud">
@@ -91,7 +22,7 @@ export default function App() {
             <span className="hud-title">{STRINGS.appTitle}</span>
             <button
               className="hud-refresh"
-              onClick={e => { e.stopPropagation(); window.location.reload() }}
+              onClick={() => window.location.reload()}
             >↺</button>
           </div>
           <span className="hud-clock">{hh}:{mm}</span>
@@ -100,11 +31,11 @@ export default function App() {
         <div className="hud-center" />
 
         <div className="hud-bottom">
-          {sttError
-            ? <span className="hud-error">STT: {sttError}</span>
+          {!connected
+            ? <span className="hud-hint">{STRINGS.hud.connecting}</span>
             : orbState === 'idle'
-              ? <span className="hud-hint">{STRINGS.hud.tapToSpeak}</span>
-              : <span className={`hud-state ${orbState}`}>{STATE_LABEL[orbState]}</span>
+              ? <span className="hud-hint">{STRINGS.hud.wakeWordHint}</span>
+              : <span className={`hud-state ${orbState}`}>{STRINGS.orbState[orbState]}</span>
           }
         </div>
       </div>

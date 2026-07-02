@@ -9,6 +9,11 @@ name: Deploy parche-ui
 #   Secrets:   HERMES_API_KEY
 #   Variables: HOST_PORT (optional, default 8080)
 #              VITE_HERMES_API_URL (optional, default /api)
+#              VITE_ORCHESTRATOR_WS_URL (optional, default ws://<hostname>:8765)
+#
+# Voice (mic/STT/Hermes/TTS/speakers) is handled by orchestrator/main.py,
+# which runs directly on the Pi host and is deployed/managed separately from
+# this stack (it needs real audio hardware access, not just a container).
 
 on:
   push:
@@ -31,9 +36,7 @@ jobs:
       - name: Create .env from secrets
         run: |
           echo "VITE_HERMES_API_URL=${{ vars.VITE_HERMES_API_URL }}" > .env
-          echo "VITE_HERMES_WS_URL=${{ vars.VITE_HERMES_WS_URL }}" >> .env
-          echo "VITE_HERMES_INTERNAL_TOKEN=${{ secrets.VITE_HERMES_INTERNAL_TOKEN }}" >> .env
-          echo "VITE_OPENAI_API_KEY=${{ secrets.VITE_OPENAI_API_KEY }}" >> .env
+          echo "VITE_ORCHESTRATOR_WS_URL=${{ vars.VITE_ORCHESTRATOR_WS_URL }}" >> .env
           echo "HERMES_API_KEY=${{ secrets.HERMES_API_KEY }}" >> .env
           echo "HOST_PORT=${{ vars.HOST_PORT }}" >> .env
 
