@@ -57,6 +57,11 @@ services:
       STT_LANGUAGE: ${STT_LANGUAGE:-es}
       TTS_MODEL: ${TTS_MODEL:-tts-1-hd}
       TTS_VOICE: ${TTS_VOICE:-nova}
+      # Match your physical mic's native rate if it rejects 16000 (PortAudio
+      # "Invalid sample rate") — must be one webrtcvad accepts: 8000/16000/32000/48000.
+      MIC_SAMPLE_RATE: ${MIC_SAMPLE_RATE:-16000}
+      MIC_DEVICE: ${MIC_DEVICE:-}
+      SPEAKER_DEVICE: ${SPEAKER_DEVICE:-}
       VAD_AGGRESSIVENESS: ${VAD_AGGRESSIVENESS:-2}
       # Wake word stays off until a custom model is trained and dropped into
       # ./orchestrator/models (see orchestrator/.env.example).
