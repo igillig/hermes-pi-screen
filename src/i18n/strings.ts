@@ -18,5 +18,6 @@ export const STRINGS = {
   hud: {
     connecting: 'CONNECTING...',
     wakeWordHint: "DECÍ 'CHE PARCHE'",
+    cancel: 'CANCELAR',
   },
 } as const

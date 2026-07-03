@@ -84,14 +84,26 @@ if WAKE_WORD_ENABLED:
 
 clients: set[websockets.WebSocketServerProtocol] = set()
 current_status = "idle"
+current_turn_task: asyncio.Task | None = None
+
+
+async def cancel_current_turn() -> None:
+    if current_turn_task is not None and not current_turn_task.done():
+        log.info("cancel requested from UI")
+        current_turn_task.cancel()
 
 
 async def status_handler(websocket: websockets.WebSocketServerProtocol) -> None:
     clients.add(websocket)
     try:
         await websocket.send(json.dumps({"status": current_status}))
-        async for _ in websocket:
-            pass  # UI is display-only; incoming messages are ignored
+        async for message in websocket:
+            try:
+                msg = json.loads(message)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("action") == "cancel":
+                await cancel_current_turn()
     finally:
         clients.discard(websocket)
 
@@ -362,9 +374,11 @@ async def playback_worker(queue: asyncio.Queue) -> None:
 
 
 async def speak_turn(history: list[dict]) -> str:
-    """Streams Hermes's reply, speaking it sentence-by-sentence as it arrives."""
+    """Streams Hermes's reply, speaking it sentence-by-sentence as it arrives.
+    Cancellable — see cancel_current_turn()."""
     queue: asyncio.Queue = asyncio.Queue()
     playback_task = asyncio.create_task(playback_worker(queue))
+    tts_tasks: list[asyncio.Task] = []
 
     buffer = ""
     full_reply = ""
@@ -372,26 +386,34 @@ async def speak_turn(history: list[dict]) -> str:
     async def schedule(sentence: str) -> None:
         future = asyncio.get_running_loop().create_future()
         await queue.put(future)
-        asyncio.create_task(fill_tts_future(sentence, future))
+        tts_tasks.append(asyncio.create_task(fill_tts_future(sentence, future)))
 
-    async for delta in stream_hermes(history):
-        buffer += delta
-        full_reply += delta
-        sentences, buffer = extract_sentences(buffer)
-        for sentence in sentences:
-            await schedule(sentence)
+    try:
+        async for delta in stream_hermes(history):
+            buffer += delta
+            full_reply += delta
+            sentences, buffer = extract_sentences(buffer)
+            for sentence in sentences:
+                await schedule(sentence)
 
-    if buffer.strip():
-        await schedule(buffer)
+        if buffer.strip():
+            await schedule(buffer)
 
-    await queue.put(None)
-    await playback_task
-    return full_reply
+        await queue.put(None)
+        await playback_task
+        return full_reply
+    except asyncio.CancelledError:
+        sd.stop()  # unblocks _play_pcm_sync's sd.wait() in the executor thread right away
+        for t in tts_tasks:
+            t.cancel()
+        playback_task.cancel()
+        raise
 
 
 # ── Main conversation loop ───────────────────────────────────────────────────
 
 async def conversation_loop() -> None:
+    global current_turn_task
     loop = asyncio.get_running_loop()
     history: list[dict] = []
 
@@ -413,7 +435,16 @@ async def conversation_loop() -> None:
             log.info("user: %s", text)
 
             history.append({"role": "user", "content": text})
-            reply = await speak_turn(history)
+            current_turn_task = asyncio.create_task(speak_turn(history))
+            try:
+                reply = await current_turn_task
+            except asyncio.CancelledError:
+                log.info("turn cancelled")
+                history.pop()
+                continue
+            finally:
+                current_turn_task = None
+
             log.info("hermes: %s", reply)
             history.append({"role": "assistant", "content": reply})
             history[:] = history[-HISTORY_LIMIT:]

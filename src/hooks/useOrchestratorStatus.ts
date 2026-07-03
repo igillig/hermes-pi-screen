@@ -60,5 +60,11 @@ export function useOrchestratorStatus() {
     }
   }, [connect])
 
-  return { status, connected }
+  const cancel = useCallback(() => {
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({ action: 'cancel' }))
+    }
+  }, [])
+
+  return { status, connected, cancel }
 }

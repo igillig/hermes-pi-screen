@@ -4,7 +4,7 @@ import { useOrchestratorStatus } from './hooks/useOrchestratorStatus'
 import { STRINGS } from './i18n/strings'
 
 export default function App() {
-  const { status: orbState, connected } = useOrchestratorStatus()
+  const { status: orbState, connected, cancel } = useOrchestratorStatus()
 
   const [time, setTime] = useState(() => new Date())
   useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t) }, [])
@@ -28,7 +28,11 @@ export default function App() {
           <span className="hud-clock">{hh}:{mm}</span>
         </div>
 
-        <div className="hud-center" />
+        <div className="hud-center">
+          {orbState === 'thinking' && (
+            <button className="hud-cancel" onClick={cancel}>{STRINGS.hud.cancel}</button>
+          )}
+        </div>
 
         <div className="hud-bottom">
           {!connected
