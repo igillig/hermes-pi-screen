@@ -416,11 +416,11 @@ def _session_update_payload() -> dict[str, Any]:
             "instructions": REALTIME_INSTRUCTIONS,
             "audio": {
                 "input": {
-                    "format": "pcm16",
+                    "format": {"type": "audio/pcm", "rate": REALTIME_SAMPLE_RATE},
                     "turn_detection": {"type": "server_vad"},
                 },
                 "output": {
-                    "format": "pcm16",
+                    "format": {"type": "audio/pcm", "rate": REALTIME_SAMPLE_RATE},
                     "voice": REALTIME_VOICE,
                 },
             },
