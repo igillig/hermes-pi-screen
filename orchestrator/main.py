@@ -299,13 +299,27 @@ class RealtimeSession:
         self.playback_queue.put_nowait(None)
 
     def _mic_thread(self) -> None:
-        for frame in _frames_at_rate(MIC_DEVICE, REALTIME_SAMPLE_RATE, MIC_FRAME_MS):
-            if self.stop_event.is_set():
-                return
-            self.loop.call_soon_threadsafe(self.mic_queue.put_nowait, frame)
+        try:
+            log.info("mic thread starting (device=%s, target_rate=%d)", MIC_DEVICE, REALTIME_SAMPLE_RATE)
+            sent = 0
+            for frame in _frames_at_rate(MIC_DEVICE, REALTIME_SAMPLE_RATE, MIC_FRAME_MS):
+                if self.stop_event.is_set():
+                    log.info("mic thread stopping")
+                    return
+                self.loop.call_soon_threadsafe(self.mic_queue.put_nowait, frame)
+                sent += 1
+                if sent % 250 == 0:  # ~5s at 20ms frames, just a heartbeat
+                    log.info("mic thread alive: %d frames sent so far", sent)
+        except Exception:
+            log.exception("mic thread crashed")
 
     def _playback_thread(self) -> None:
-        stream, native_rate, channels, dtype = _open_output_stream()
+        try:
+            stream, native_rate, channels, dtype = _open_output_stream()
+        except Exception:
+            log.exception("playback thread failed to open output stream")
+            return
+        log.info("playback stream open: native_rate=%d channels=%d dtype=%s", native_rate, channels, dtype)
         self.output_stream = stream
         state = None
         try:
@@ -313,6 +327,7 @@ class RealtimeSession:
                 fut = asyncio.run_coroutine_threadsafe(self.playback_queue.get(), self.loop)
                 pcm = fut.result()
                 if pcm is None or self.stop_event.is_set():
+                    log.info("playback thread stopping")
                     return
                 if native_rate != REALTIME_SAMPLE_RATE:
                     pcm, state = audioop.ratecv(pcm, 2, 1, REALTIME_SAMPLE_RATE, native_rate, state)
@@ -323,6 +338,8 @@ class RealtimeSession:
                 except sd.PortAudioError:
                     # stream was aborted by interrupt_playback() — reactivate and drop this chunk
                     stream.start()
+        except Exception:
+            log.exception("playback thread crashed")
         finally:
             stream.stop()
             stream.close()
@@ -345,13 +362,19 @@ class RealtimeSession:
                 pass
 
     async def send_mic_audio(self) -> None:
+        sent = 0
         while True:
             frame = await self.mic_queue.get()
             b64 = base64.b64encode(frame).decode("ascii")
             await self.ws.send(json.dumps({"type": "input_audio_buffer.append", "audio": b64}))
+            sent += 1
+            if sent % 250 == 0:
+                log.info("sent %d audio chunks to the realtime API so far", sent)
 
     async def handle_event(self, event: dict[str, Any]) -> None:
         etype = event.get("type")
+        if etype != "response.audio.delta":  # too spammy to log every single one
+            log.info("realtime event: %s", etype)
 
         if etype == "input_audio_buffer.speech_started":
             if self.speaking:
