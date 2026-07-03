@@ -11,6 +11,15 @@ name: Deploy parche-ui
 #              VITE_HERMES_API_URL (optional, default /api)
 #              VITE_ORCHESTRATOR_WS_URL (optional, default ws://<hostname>:8765)
 #              WAKE_WORD_ENABLED (optional, default false)
+#              STT_LANGUAGE (optional, default es)
+#              TTS_MODEL (optional, default tts-1-hd)
+#              TTS_VOICE (optional, default nova — e.g. onyx/echo/ash for a male voice)
+#              VAD_AGGRESSIVENESS (optional, default 2)
+#              OWW_THRESHOLD (optional, default 0.5)
+#
+# IMPORTANT: this workflow overwrites .env from scratch on every deploy — any
+# orchestrator env var you want to survive a push must be listed here AND set
+# as a repo Variable/Secret, not just hand-edited in the Pi's .env file.
 #
 # Voice (mic/STT/Hermes/TTS/speakers) is handled by orchestrator/main.py, built
 # and deployed as its own container in stack.yml (with /dev/snd passed through
