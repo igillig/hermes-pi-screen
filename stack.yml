@@ -57,8 +57,14 @@ services:
       STATUS_WS_HOST: 0.0.0.0
       STATUS_WS_PORT: 8765
       STT_LANGUAGE: ${STT_LANGUAGE:-es}
-      TTS_MODEL: ${TTS_MODEL:-tts-1-hd}
-      TTS_VOICE: ${TTS_VOICE:-nova}
+      # Trying ElevenLabs instead of OpenAI for TTS (better native Latin American
+      # Spanish voices). OpenAI vars kept commented below in case we revert:
+      # TTS_MODEL: ${TTS_MODEL:-tts-1-hd}
+      # TTS_VOICE: ${TTS_VOICE:-nova}
+      ELEVEN_LABS_API_KEY: ${ELEVEN_LABS_API_KEY}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-wfTWLJ20rcMqvU8gIiAB}
+      ELEVENLABS_MODEL_ID: ${ELEVENLABS_MODEL_ID:-eleven_flash_v2_5}
+      TTS_SAMPLE_RATE: ${TTS_SAMPLE_RATE:-24000}
       # Target rate for VAD/Whisper — the orchestrator auto-detects your mic's
       # native rate and resamples, so this rarely needs changing. Must be one
       # webrtcvad accepts: 8000/16000/32000/48000.

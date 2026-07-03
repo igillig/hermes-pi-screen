@@ -2,9 +2,9 @@
 
 Owns the whole voice loop end to end: wake-word gating, mic capture + VAD,
 OpenAI Whisper (STT), streaming chat against the Hermes API, sentence-buffered
-OpenAI TTS, and playback on the Pi's speakers. The UI is a pure status display
-— this script pushes {"status": "idle"|"listening"|"thinking"|"talking"} over
-a small WebSocket server so the orb can react in real time.
+ElevenLabs TTS, and playback on the Pi's speakers. The UI is a pure status
+display — this script pushes {"status": "idle"|"listening"|"thinking"|"talking"}
+over a small WebSocket server so the orb can react in real time.
 """
 
 import asyncio
@@ -43,9 +43,14 @@ STATUS_WS_HOST = os.getenv("STATUS_WS_HOST", "0.0.0.0")
 STATUS_WS_PORT = int(os.getenv("STATUS_WS_PORT", "8765"))
 
 STT_LANGUAGE = os.getenv("STT_LANGUAGE", "es")
-TTS_MODEL = os.getenv("TTS_MODEL", "tts-1-hd")
-TTS_VOICE = os.getenv("TTS_VOICE", "nova")
-TTS_SAMPLE_RATE = 24000  # fixed by OpenAI's "pcm" response format
+# TTS_MODEL = os.getenv("TTS_MODEL", "tts-1-hd")
+# TTS_VOICE = os.getenv("TTS_VOICE", "nova")
+# TTS_SAMPLE_RATE = 24000  # fixed by OpenAI's "pcm" response format
+
+ELEVENLABS_API_KEY = os.environ["ELEVEN_LABS_API_KEY"]
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "wfTWLJ20rcMqvU8gIiAB")
+ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")  # low-latency model
+TTS_SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "24000"))  # must match an ElevenLabs pcm_* output_format
 
 MIC_SAMPLE_RATE = int(os.getenv("MIC_SAMPLE_RATE", "16000"))
 MIC_DEVICE = os.getenv("MIC_DEVICE") or None
@@ -280,12 +285,26 @@ def extract_sentences(buffer: str) -> tuple[list[str], str]:
     return sentences, buffer[last_end:]
 
 
-# ── OpenAI TTS + ordered playback ────────────────────────────────────────────
+# ── ElevenLabs TTS + ordered playback ────────────────────────────────────────
+# Trying ElevenLabs instead of OpenAI for TTS — better native Latin American
+# Spanish voices. OpenAI version kept below, commented, in case we revert.
+
+# def _synthesize_sync(text: str) -> bytes:
+#     resp = openai_client.audio.speech.create(
+#         model=TTS_MODEL, voice=TTS_VOICE, input=text, response_format="pcm",
+#     )
+#     return resp.content
+
 
 def _synthesize_sync(text: str) -> bytes:
-    resp = openai_client.audio.speech.create(
-        model=TTS_MODEL, voice=TTS_VOICE, input=text, response_format="pcm",
+    resp = httpx.post(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
+        headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+        params={"output_format": f"pcm_{TTS_SAMPLE_RATE}"},
+        json={"text": text, "model_id": ELEVENLABS_MODEL_ID},
+        timeout=30,
     )
+    resp.raise_for_status()
     return resp.content
 
 

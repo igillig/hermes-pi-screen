@@ -6,14 +6,18 @@ name: Deploy parche-ui
 #
 # Required GitHub config (Settings -> Secrets and variables -> Actions),
 # under the "production" environment:
-#   Secrets:   HERMES_API_KEY, VITE_OPENAI_API_KEY (used as the orchestrator's OPENAI_API_KEY)
+#   Secrets:   HERMES_API_KEY, VITE_OPENAI_API_KEY (used as the orchestrator's OPENAI_API_KEY, still needed for Whisper STT),
+#              ELEVEN_LABS_API_KEY (TTS)
 #   Variables: HOST_PORT (optional, default 8080)
 #              VITE_HERMES_API_URL (optional, default /api)
 #              VITE_ORCHESTRATOR_WS_URL (optional — same-origin /ws-status via nginx by default, no need to set)
 #              WAKE_WORD_ENABLED (optional, default false)
 #              STT_LANGUAGE (optional, default es)
-#              TTS_MODEL (optional, default tts-1-hd)
-#              TTS_VOICE (optional, default nova — e.g. onyx/echo/ash for a male voice)
+#              ELEVENLABS_VOICE_ID (optional, default wfTWLJ20rcMqvU8gIiAB)
+#              ELEVENLABS_MODEL_ID (optional, default eleven_flash_v2_5)
+#              TTS_SAMPLE_RATE (optional, default 24000)
+#              # Trying ElevenLabs instead of OpenAI for TTS — if we revert, OpenAI
+#              # vars were TTS_MODEL (default tts-1-hd) / TTS_VOICE (default nova)
 #              VAD_AGGRESSIVENESS (optional, default 2)
 #              OWW_THRESHOLD (optional, default 0.5)
 #
@@ -51,8 +55,14 @@ jobs:
           echo "OPENAI_API_KEY=${{ secrets.VITE_OPENAI_API_KEY }}" >> .env
           echo "WAKE_WORD_ENABLED=${{ vars.WAKE_WORD_ENABLED }}" >> .env
           echo "STT_LANGUAGE=${{ vars.STT_LANGUAGE }}" >> .env
-          echo "TTS_MODEL=${{ vars.TTS_MODEL }}" >> .env
-          echo "TTS_VOICE=${{ vars.TTS_VOICE }}" >> .env
+          # Trying ElevenLabs instead of OpenAI for TTS. OpenAI lines kept
+          # commented in case we revert:
+          # echo "TTS_MODEL=${{ vars.TTS_MODEL }}" >> .env
+          # echo "TTS_VOICE=${{ vars.TTS_VOICE }}" >> .env
+          echo "ELEVEN_LABS_API_KEY=${{ secrets.ELEVEN_LABS_API_KEY }}" >> .env
+          echo "ELEVENLABS_VOICE_ID=${{ vars.ELEVENLABS_VOICE_ID }}" >> .env
+          echo "ELEVENLABS_MODEL_ID=${{ vars.ELEVENLABS_MODEL_ID }}" >> .env
+          echo "TTS_SAMPLE_RATE=${{ vars.TTS_SAMPLE_RATE }}" >> .env
           echo "VAD_AGGRESSIVENESS=${{ vars.VAD_AGGRESSIVENESS }}" >> .env
           echo "OWW_THRESHOLD=${{ vars.OWW_THRESHOLD }}" >> .env
           echo "HOST_PORT=${{ vars.HOST_PORT }}" >> .env

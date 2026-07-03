@@ -82,7 +82,11 @@ values there (or wire in a full i18n library later).
 | Variable                   | Scope      | Container      | Required | Description                                                                 |
 | -------------------------- | ---------- | -------------- | -------- | ---------------------------------------------------------------------------- |
 | `HERMES_API_KEY`           | runtime    | both           | Yes      | UI: injected by nginx into `Authorization`. Orchestrator: used to call Hermes directly. Never shipped to the browser. |
-| `OPENAI_API_KEY`           | runtime    | orchestrator   | Yes      | Whisper STT + TTS.                                                          |
+| `OPENAI_API_KEY`           | runtime    | orchestrator   | Yes      | Whisper STT (TTS moved to ElevenLabs — see below).                          |
+| `ELEVEN_LABS_API_KEY`      | runtime    | orchestrator   | Yes      | TTS. Being tried in place of OpenAI's for better native Latin American Spanish voices. |
+| `ELEVENLABS_VOICE_ID`      | runtime    | orchestrator   | No       | Default: `wfTWLJ20rcMqvU8gIiAB`.                                            |
+| `ELEVENLABS_MODEL_ID`      | runtime    | orchestrator   | No       | Default: `eleven_flash_v2_5` (low-latency model).                           |
+| `TTS_SAMPLE_RATE`          | runtime    | orchestrator   | No       | Default: `24000`. Must match an ElevenLabs `pcm_*` output format.           |
 | `HOST_PORT`                | runtime    | parche-ui      | No       | Host port the UI is published on. Default: `8080`.                          |
 | `VITE_HERMES_API_URL`      | build-time | parche-ui      | No       | API base URL baked into the bundle. Default: `/api` (same-origin proxy).    |
 | `VITE_ORCHESTRATOR_WS_URL` | build-time | parche-ui      | No       | Status WebSocket URL. Default: same-origin `/ws-status`, proxied by nginx to `orchestrator:8765` internally — normally never set. |
@@ -142,11 +146,12 @@ prefer — there is no functional difference.
    - **Web editor**: paste the contents of `stack.yml`.
 3. Under **Environment variables**, add:
 
-   | Name              | Value             |
-   | ----------------- | ----------------- |
-   | `HERMES_API_KEY`  | `your-api-key`    |
-   | `OPENAI_API_KEY`  | `your-openai-key` |
-   | `HOST_PORT`       | `8080` (optional) |
+   | Name                  | Value                |
+   | --------------------- | -------------------- |
+   | `HERMES_API_KEY`      | `your-api-key`       |
+   | `OPENAI_API_KEY`      | `your-openai-key`    |
+   | `ELEVEN_LABS_API_KEY` | `your-elevenlabs-key`|
+   | `HOST_PORT`           | `8080` (optional)    |
 
 4. **Deploy the stack**.
 5. Open the UI at `http://<raspberry-ip>:8080`.
@@ -155,7 +160,7 @@ prefer — there is no functional difference.
 
 ```bash
 # On the Raspberry, from the project directory:
-cp .env.example .env        # then set HERMES_API_KEY, OPENAI_API_KEY (and HOST_PORT if needed)
+cp .env.example .env        # then set HERMES_API_KEY, OPENAI_API_KEY, ELEVEN_LABS_API_KEY (and HOST_PORT if needed)
 docker compose -f stack.yml up -d --build
 ```
 
@@ -217,6 +222,7 @@ docker run -d --restart unless-stopped \
   --device /dev/snd:/dev/snd \
   -v "$(pwd)/orchestrator/models:/app/models" \
   -e OPENAI_API_KEY=your-openai-key \
+  -e ELEVEN_LABS_API_KEY=your-elevenlabs-key \
   -e HERMES_API_KEY=your-api-key \
   --name parche-orchestrator parche-orchestrator:latest
 ```
