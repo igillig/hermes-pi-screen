@@ -407,16 +407,23 @@ class RealtimeSession:
 
 
 def _session_update_payload() -> dict[str, Any]:
+    # GA API shape: audio config (format/voice/turn_detection) moved from flat
+    # session.* fields into session.audio.input / session.audio.output.
     return {
         "type": "session.update",
         "session": {
-            "type": "realtime",  # GA API requires this; "realtime" = speech-to-speech mode
-            # "modalities" was removed/renamed in the GA shape (rejected as unknown_parameter).
+            "type": "realtime",
             "instructions": REALTIME_INSTRUCTIONS,
-            "voice": REALTIME_VOICE,
-            "input_audio_format": "pcm16",
-            "output_audio_format": "pcm16",
-            "turn_detection": {"type": "server_vad"},
+            "audio": {
+                "input": {
+                    "format": "pcm16",
+                    "turn_detection": {"type": "server_vad"},
+                },
+                "output": {
+                    "format": "pcm16",
+                    "voice": REALTIME_VOICE,
+                },
+            },
             "tools": [ASK_HERMES_TOOL],
             "tool_choice": "auto",
         },
