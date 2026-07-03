@@ -423,7 +423,9 @@ def _session_update_payload() -> dict[str, Any]:
 
 
 async def run_realtime_session() -> None:
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "OpenAI-Beta": "realtime=v1"}
+    # No "OpenAI-Beta: realtime=v1" header — that opts into the old beta
+    # session shape, which the GA API now rejects with beta_api_shape_disabled.
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
     async with websockets.connect(REALTIME_WS_URL, additional_headers=headers) as ws:
         await ws.send(json.dumps(_session_update_payload()))
 
