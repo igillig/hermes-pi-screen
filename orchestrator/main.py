@@ -411,7 +411,7 @@ def _session_update_payload() -> dict[str, Any]:
         "type": "session.update",
         "session": {
             "type": "realtime",  # GA API requires this; "realtime" = speech-to-speech mode
-            "modalities": ["audio", "text"],
+            # "modalities" was removed/renamed in the GA shape (rejected as unknown_parameter).
             "instructions": REALTIME_INSTRUCTIONS,
             "voice": REALTIME_VOICE,
             "input_audio_format": "pcm16",
