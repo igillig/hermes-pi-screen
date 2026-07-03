@@ -62,7 +62,7 @@ services:
       # TTS_MODEL: ${TTS_MODEL:-tts-1-hd}
       # TTS_VOICE: ${TTS_VOICE:-nova}
       ELEVEN_LABS_API_KEY: ${ELEVEN_LABS_API_KEY}
-      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-wfTWLJ20rcMqvU8gIiAB}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-k8cFOyAg7B9qwBlDDNTC}
       ELEVENLABS_MODEL_ID: ${ELEVENLABS_MODEL_ID:-eleven_flash_v2_5}
       TTS_SAMPLE_RATE: ${TTS_SAMPLE_RATE:-24000}
       # Target rate for VAD/Whisper — the orchestrator auto-detects your mic's
