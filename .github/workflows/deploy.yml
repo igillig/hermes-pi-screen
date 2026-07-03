@@ -9,7 +9,7 @@ name: Deploy parche-ui
 #   Secrets:   HERMES_API_KEY, VITE_OPENAI_API_KEY (used as the orchestrator's OPENAI_API_KEY)
 #   Variables: HOST_PORT (optional, default 8080)
 #              VITE_HERMES_API_URL (optional, default /api)
-#              VITE_ORCHESTRATOR_WS_URL (optional, default ws://<hostname>:8765)
+#              VITE_ORCHESTRATOR_WS_URL (optional — same-origin /ws-status via nginx by default, no need to set)
 #              WAKE_WORD_ENABLED (optional, default false)
 #              STT_LANGUAGE (optional, default es)
 #              TTS_MODEL (optional, default tts-1-hd)

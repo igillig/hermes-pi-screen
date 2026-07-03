@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import type { OrbState } from '../components/NeuralOrb'
 
-const getWsUrl = () =>
-  (import.meta.env.VITE_ORCHESTRATOR_WS_URL as string | undefined)
-    ?? `ws://${window.location.hostname}:8765`
+// Same-origin by default — nginx reverse-proxies /ws-status to the
+// orchestrator container over the internal docker network (see nginx.conf),
+// so the browser never needs a separate host/port for it. Only set
+// VITE_ORCHESTRATOR_WS_URL if you're bypassing that proxy entirely.
+const getWsUrl = () => {
+  const explicit = import.meta.env.VITE_ORCHESTRATOR_WS_URL as string | undefined
+  if (explicit) return explicit
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}/ws-status`
+}
 
 const RECONNECT_DELAY_MS = 3000
 

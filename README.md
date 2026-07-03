@@ -10,7 +10,9 @@ Hermes chat, sentence-buffered OpenAI TTS, and speaker playback) lives in
 (`orchestrator` service in `stack.yml`) with `/dev/snd` passed through for real
 mic/speaker access. The orchestrator pushes
 `{"status": "idle" | "listening" | "thinking" | "talking"}` over a small
-WebSocket server that this UI connects to and mirrors onto the orb.
+WebSocket server; the browser reaches it same-origin at `/ws-status`, which
+nginx reverse-proxies to `orchestrator:8765` over the internal docker network
+(no separate host/port to configure — see `nginx.conf`).
 `docker compose -f stack.yml up -d` (or a push to `main`, see below) brings up
 both containers together.
 
@@ -83,7 +85,7 @@ values there (or wire in a full i18n library later).
 | `OPENAI_API_KEY`           | runtime    | orchestrator   | Yes      | Whisper STT + TTS.                                                          |
 | `HOST_PORT`                | runtime    | parche-ui      | No       | Host port the UI is published on. Default: `8080`.                          |
 | `VITE_HERMES_API_URL`      | build-time | parche-ui      | No       | API base URL baked into the bundle. Default: `/api` (same-origin proxy).    |
-| `VITE_ORCHESTRATOR_WS_URL` | build-time | parche-ui      | No       | WebSocket URL for the orchestrator's status broadcasts. Default: `ws://<hostname>:8765`. |
+| `VITE_ORCHESTRATOR_WS_URL` | build-time | parche-ui      | No       | Status WebSocket URL. Default: same-origin `/ws-status`, proxied by nginx to `orchestrator:8765` internally — normally never set. |
 | `WAKE_WORD_ENABLED`        | runtime    | orchestrator   | No       | `false` by default — permanent VAD-only listening until the wake-word model is trained. |
 | `OWW_MODEL_PATH`           | runtime    | orchestrator   | Only if wake word enabled | Path to the trained `.onnx` inside the container; defaults to `/app/models/che_parche.onnx` (bind-mounted from `orchestrator/models/`). |
 | `OWW_THRESHOLD`            | runtime    | orchestrator   | No       | Detection score threshold, default `0.5`.                                   |
@@ -207,9 +209,11 @@ docker run -d --restart unless-stopped \
 
 docker build -t parche-orchestrator:latest orchestrator
 
+# --network-alias orchestrator matters: nginx.conf proxies /ws-status to
+# "orchestrator:8765" by container/service name, not by --name.
 docker run -d --restart unless-stopped \
-  -p 8765:8765 \
   --network hermes-agent_default \
+  --network-alias orchestrator \
   --device /dev/snd:/dev/snd \
   -v "$(pwd)/orchestrator/models:/app/models" \
   -e OPENAI_API_KEY=your-openai-key \

@@ -8,8 +8,10 @@
 #
 # orchestrator: owns mic/STT/Hermes/TTS/speakers (orchestrator/main.py). Needs
 # real audio hardware, so /dev/snd is passed through from the Pi host. Talks to
-# Hermes directly over the shared network (no nginx hop) and pushes status to
-# the UI over its own WebSocket (see VITE_ORCHESTRATOR_WS_URL).
+# Hermes directly over the shared network (no nginx hop). Its status WebSocket
+# is reached by the browser same-origin, via nginx proxying /ws-status to
+# orchestrator:8765 over the internal docker network (see nginx.conf) — the
+# "8765:8765" port below is only for direct debugging, not required by the UI.
 #
 # `docker compose -f stack.yml up -d` brings both up together — one push
 # deploys the whole thing.
