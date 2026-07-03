@@ -373,7 +373,7 @@ class RealtimeSession:
 
     async def handle_event(self, event: dict[str, Any]) -> None:
         etype = event.get("type")
-        if etype != "response.audio.delta":  # too spammy to log every single one
+        if etype != "response.output_audio.delta":  # too spammy to log every single one
             log.info("realtime event: %s", etype)
 
         if etype == "input_audio_buffer.speech_started":
@@ -382,7 +382,7 @@ class RealtimeSession:
                 self.speaking = False
             await set_status("listening")
 
-        elif etype == "response.audio.delta":
+        elif etype == "response.output_audio.delta":
             pcm = base64.b64decode(event["delta"])
             self.playback_queue.put_nowait(pcm)
             if not self.speaking:
