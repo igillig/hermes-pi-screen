@@ -6,7 +6,7 @@ name: Deploy parche-ui
 #
 # Required GitHub config (Settings -> Secrets and variables -> Actions),
 # under the "production" environment:
-#   Secrets:   HERMES_API_KEY, OPENAI_API_KEY
+#   Secrets:   HERMES_API_KEY, VITE_OPENAI_API_KEY (used as the orchestrator's OPENAI_API_KEY)
 #   Variables: HOST_PORT (optional, default 8080)
 #              VITE_HERMES_API_URL (optional, default /api)
 #              VITE_ORCHESTRATOR_WS_URL (optional, default ws://<hostname>:8765)
@@ -50,6 +50,11 @@ jobs:
           echo "HERMES_API_KEY=${{ secrets.HERMES_API_KEY }}" >> .env
           echo "OPENAI_API_KEY=${{ secrets.VITE_OPENAI_API_KEY }}" >> .env
           echo "WAKE_WORD_ENABLED=${{ vars.WAKE_WORD_ENABLED }}" >> .env
+          echo "STT_LANGUAGE=${{ vars.STT_LANGUAGE }}" >> .env
+          echo "TTS_MODEL=${{ vars.TTS_MODEL }}" >> .env
+          echo "TTS_VOICE=${{ vars.TTS_VOICE }}" >> .env
+          echo "VAD_AGGRESSIVENESS=${{ vars.VAD_AGGRESSIVENESS }}" >> .env
+          echo "OWW_THRESHOLD=${{ vars.OWW_THRESHOLD }}" >> .env
           echo "HOST_PORT=${{ vars.HOST_PORT }}" >> .env
 
       - name: Build and deploy
