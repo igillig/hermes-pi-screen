@@ -6,12 +6,14 @@
 # network (hermes-agent_default). The browser talks same-origin, so no IP or
 # API key is baked into the bundle.
 #
-# orchestrator: owns mic/STT/Hermes/TTS/speakers (orchestrator/main.py). Needs
-# real audio hardware, so /dev/snd is passed through from the Pi host. Talks to
-# Hermes directly over the shared network (no nginx hop). Its status WebSocket
-# is reached by the browser same-origin, via nginx proxying /ws-status to
-# orchestrator:8765 over the internal docker network (see nginx.conf) — the
-# "8765:8765" port below is only for direct debugging, not required by the UI.
+# orchestrator: owns the voice loop (orchestrator/main.py). Branch
+# feature/openai-realtime: speaks directly to OpenAI's Realtime API
+# (speech-to-speech) instead of the old VAD/Whisper/Hermes-HTTP/TTS pipeline,
+# bridging tool-calls back to Hermes for real capability. Needs real audio
+# hardware, so /dev/snd is passed through from the Pi host. Its status
+# WebSocket is reached by the browser same-origin, via nginx proxying
+# /ws-status to orchestrator:8765 over the internal docker network (see
+# nginx.conf) — the "8765:8765" port below is only for direct debugging.
 #
 # `docker compose -f stack.yml up -d` brings both up together — one push
 # deploys the whole thing.
@@ -51,27 +53,19 @@ services:
     devices:
       - /dev/snd:/dev/snd
     environment:
+      # Auth for the Realtime API (speech-to-speech — replaces the old
+      # separate Whisper STT + TTS calls entirely).
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      REALTIME_MODEL: ${REALTIME_MODEL:-gpt-realtime}
+      REALTIME_VOICE: ${REALTIME_VOICE:-marin}
+      # Used only for the ask_hermes tool the realtime model calls when it
+      # needs real capability (search, actions, etc), not for every turn.
       HERMES_API_URL: ${HERMES_API_URL:-http://hermes_agent:8000}
       HERMES_API_KEY: ${HERMES_API_KEY}
       STATUS_WS_HOST: 0.0.0.0
       STATUS_WS_PORT: 8765
-      STT_LANGUAGE: ${STT_LANGUAGE:-es}
-      # Trying ElevenLabs instead of OpenAI for TTS (better native Latin American
-      # Spanish voices). OpenAI vars kept commented below in case we revert:
-      # TTS_MODEL: ${TTS_MODEL:-tts-1-hd}
-      # TTS_VOICE: ${TTS_VOICE:-nova}
-      ELEVEN_LABS_API_KEY: ${ELEVEN_LABS_API_KEY}
-      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-k8cFOyAg7B9qwBlDDNTC}
-      ELEVENLABS_MODEL_ID: ${ELEVENLABS_MODEL_ID:-eleven_flash_v2_5}
-      TTS_SAMPLE_RATE: ${TTS_SAMPLE_RATE:-24000}
-      # Target rate for VAD/Whisper — the orchestrator auto-detects your mic's
-      # native rate and resamples, so this rarely needs changing. Must be one
-      # webrtcvad accepts: 8000/16000/32000/48000.
-      MIC_SAMPLE_RATE: ${MIC_SAMPLE_RATE:-16000}
       MIC_DEVICE: ${MIC_DEVICE:-}
       SPEAKER_DEVICE: ${SPEAKER_DEVICE:-}
-      VAD_AGGRESSIVENESS: ${VAD_AGGRESSIVENESS:-2}
       # Wake word stays off until a custom model is trained and dropped into
       # ./orchestrator/models (see orchestrator/.env.example).
       WAKE_WORD_ENABLED: ${WAKE_WORD_ENABLED:-false}

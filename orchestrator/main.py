@@ -1,30 +1,34 @@
 """HERMES voice orchestrator — runs on the Raspberry Pi.
 
-Owns the whole voice loop end to end: wake-word gating, mic capture + VAD,
-OpenAI Whisper (STT), streaming chat against the Hermes API, sentence-buffered
-ElevenLabs TTS, and playback on the Pi's speakers. The UI is a pure status
-display — this script pushes {"status": "idle"|"listening"|"thinking"|"talking"}
-over a small WebSocket server so the orb can react in real time.
+EXPERIMENTAL (branch feature/openai-realtime): replaces the old discrete
+VAD -> Whisper -> Hermes(HTTP) -> TTS pipeline with a single persistent
+connection to OpenAI's Realtime API (speech-to-speech, server-side turn
+detection). Hermes stays in the loop as a tool ("ask_hermes") the realtime
+model can call for anything requiring real capability (search, actions,
+memory) — the model is prompted to speak a short filler phrase before
+invoking it, so the conversation never goes silent while Hermes churns.
+
+The UI is still a pure status display — this script pushes
+{"status": "idle"|"listening"|"thinking"|"talking"} over a small WebSocket
+server so the orb can react in real time.
 """
+
+from __future__ import annotations
 
 import asyncio
 import audioop
-import io
+import base64
 import json
 import logging
 import os
-import re
-import wave
-from collections.abc import AsyncIterator, Iterator
-from contextlib import closing
+import threading
+from typing import Any
 
 import httpx
 import numpy as np
 import sounddevice as sd
-import webrtcvad
 import websockets
 from dotenv import load_dotenv
-from openai import OpenAI
 from openwakeword.model import Model as WakeWordModel
 from openwakeword.utils import download_models as download_wakeword_models
 
@@ -42,41 +46,70 @@ HERMES_API_KEY = os.getenv("HERMES_API_KEY", "")
 STATUS_WS_HOST = os.getenv("STATUS_WS_HOST", "0.0.0.0")
 STATUS_WS_PORT = int(os.getenv("STATUS_WS_PORT", "8765"))
 
-STT_LANGUAGE = os.getenv("STT_LANGUAGE", "es")
-# TTS_MODEL = os.getenv("TTS_MODEL", "tts-1-hd")
-# TTS_VOICE = os.getenv("TTS_VOICE", "nova")
-# TTS_SAMPLE_RATE = 24000  # fixed by OpenAI's "pcm" response format
+# OpenAI Realtime API. Model/voice names are the ones current as of this
+# writing (Jan 2026) — check platform.openai.com/docs/guides/realtime if
+# either gets rejected by the API, naming has shifted before.
+REALTIME_MODEL = os.getenv("REALTIME_MODEL", "gpt-realtime")
+REALTIME_VOICE = os.getenv("REALTIME_VOICE", "marin")
+REALTIME_SAMPLE_RATE = 24000  # fixed by the API (pcm16, mono)
+REALTIME_WS_URL = f"wss://api.openai.com/v1/realtime?model={REALTIME_MODEL}"
 
-ELEVENLABS_API_KEY = os.environ["ELEVEN_LABS_API_KEY"]
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "wfTWLJ20rcMqvU8gIiAB")
-ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")  # low-latency model
-TTS_SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "24000"))  # must match an ElevenLabs pcm_* output_format
+DEFAULT_INSTRUCTIONS = """Sos "Parche", un asistente de voz argentino. Hablás en \
+español rioplatense, tono informal y directo, como si fueras un amigo copado.
 
-MIC_SAMPLE_RATE = int(os.getenv("MIC_SAMPLE_RATE", "16000"))
+Cuando el pedido del usuario requiera buscar información actualizada, ejecutar \
+una acción real (prender/apagar algo, controlar un dispositivo, leer archivos, \
+o cualquier cosa que exceda una charla simple), invocá la herramienta \
+ask_hermes con el pedido.
+
+Muy importante: cuando decidas invocar ask_hermes, ANTES de esperar el \
+resultado respondé primero con una frase corta y natural reconociendo el \
+pedido (por ejemplo "dale, dame un segundo", "ok, ya lo hago", "esperá un \
+toque que lo reviso") — variá la frase cada vez, que no suene siempre igual. \
+Recién después invocá la herramienta.
+
+Cuando recibas el resultado de ask_hermes, contestale al usuario con esa \
+información de forma natural y conversacional — no la leas textual si es \
+muy larga, resumila.
+
+Si el pedido es una charla simple (saludos, preguntas generales que sabés \
+responder vos), contestá directo sin usar la herramienta."""
+REALTIME_INSTRUCTIONS = os.getenv("REALTIME_INSTRUCTIONS", DEFAULT_INSTRUCTIONS)
+
+ASK_HERMES_TOOL = {
+    "type": "function",
+    "name": "ask_hermes",
+    "description": (
+        "Le pasa un pedido a Hermes, el agente con capacidad de buscar "
+        "informacion, ejecutar acciones reales y memoria de largo plazo. "
+        "Usala cada vez que el pedido del usuario requiera algo que no "
+        "podes resolver vos solo con conversacion."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "El pedido del usuario, para que Hermes lo procese.",
+            },
+        },
+        "required": ["prompt"],
+    },
+}
+
 MIC_DEVICE = os.getenv("MIC_DEVICE") or None
 SPEAKER_DEVICE = os.getenv("SPEAKER_DEVICE") or None
+MIC_FRAME_MS = 20  # chunk size fed to the Realtime API's input audio buffer
 
 # Wake word ("che parche"), via openWakeWord — see orchestrator/.env.example for
 # how to train the custom model. Disabled by default: until the custom model is
-# trained and validated, the mic just listens permanently (VAD-only, no gate).
+# trained and validated, the realtime session just opens immediately and stays
+# connected for the life of the script (no re-arming after it closes).
 WAKE_WORD_ENABLED = os.getenv("WAKE_WORD_ENABLED", "false").lower() == "true"
 OWW_MODEL_PATH = os.getenv("OWW_MODEL_PATH")
 OWW_THRESHOLD = float(os.getenv("OWW_THRESHOLD", "0.5"))
 OWW_SAMPLE_RATE = 16000
 OWW_CHUNK_SAMPLES = int(os.getenv("OWW_CHUNK_SAMPLES", "1280"))  # 80ms, openWakeWord's recommended chunk size
-
-VAD_AGGRESSIVENESS = int(os.getenv("VAD_AGGRESSIVENESS", "2"))
-FRAME_MS = 30
-SPEECH_START_FRAMES = int(os.getenv("SPEECH_START_FRAMES", "3"))   # ~90ms of voice to trigger
-SPEECH_END_FRAMES = int(os.getenv("SPEECH_END_FRAMES", "20"))      # ~600ms of silence to cut
-MIN_UTTERANCE_MS = int(os.getenv("MIN_UTTERANCE_MS", "250"))
-MIN_UTTERANCE_BYTES = MIC_SAMPLE_RATE * 2 * MIN_UTTERANCE_MS // 1000
-
-HISTORY_LIMIT = 20
-
-SENTENCE_BOUNDARY = re.compile(r"[^.!?\n]*[.!?\n]+")
-
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 wakeword_model = None
 if WAKE_WORD_ENABLED:
@@ -89,13 +122,7 @@ if WAKE_WORD_ENABLED:
 
 clients: set[websockets.WebSocketServerProtocol] = set()
 current_status = "idle"
-current_turn_task: asyncio.Task | None = None
-
-
-async def cancel_current_turn() -> None:
-    if current_turn_task is not None and not current_turn_task.done():
-        log.info("cancel requested from UI")
-        current_turn_task.cancel()
+cancel_event = asyncio.Event()
 
 
 async def status_handler(websocket: websockets.WebSocketServerProtocol) -> None:
@@ -108,7 +135,8 @@ async def status_handler(websocket: websockets.WebSocketServerProtocol) -> None:
             except json.JSONDecodeError:
                 continue
             if msg.get("action") == "cancel":
-                await cancel_current_turn()
+                log.info("cancel requested from UI")
+                cancel_event.set()
     finally:
         clients.discard(websocket)
 
@@ -131,21 +159,20 @@ async def set_status(status: str) -> None:
 
 
 # ── Audio device helpers ─────────────────────────────────────────────────────
-# Real mic/speaker hardware often refuses to open at an arbitrary rate
-# (PortAudio "Invalid sample rate" — common with USB audio that only supports
-# its own native rate, e.g. 44100). Instead of guessing MIC_SAMPLE_RATE per
-# device, we always open the stream at whatever rate the device reports as its
-# default, then resample in software with the stdlib `audioop` (no extra deps,
-# works directly on 16-bit mono PCM).
+# Real mic/speaker hardware often refuses to open at an arbitrary rate/format
+# (PortAudio "Invalid sample rate" / "Sample format not supported" — see
+# orchestrator/asound.conf and git history on main for how this Pi's Astro
+# MixAmp Pro was routed). We always open at whatever the device reports as its
+# default, then resample in software with the stdlib `audioop`.
 
 def _query_native_rate(device: str | int | None, kind: str) -> int:
     info = sd.query_devices(device, kind) if device is not None else sd.query_devices(kind=kind)
     return int(info["default_samplerate"])
 
 
-def _frames_at_rate(device: str | int | None, target_rate: int, frame_ms: int) -> Iterator[bytes]:
+def _frames_at_rate(device: str | int | None, target_rate: int, frame_ms: int):
     """Yields fixed-size `frame_ms`-long PCM16 mono chunks at `target_rate`,
-    resampling on the fly from the mic's native rate."""
+    resampling on the fly from the mic's native rate. Runs forever."""
     native_rate = _query_native_rate(device, "input")
     native_frame_samples = max(1, native_rate * frame_ms // 1000)
     frame_bytes = target_rate * frame_ms // 1000 * 2
@@ -167,161 +194,6 @@ def _frames_at_rate(device: str | int | None, target_rate: int, frame_ms: int) -
                 buffer = buffer[frame_bytes:]
 
 
-# ── Wake word (blocking, runs in a worker thread) ───────────────────────────
-
-def wait_for_wake_word() -> None:
-    """Blocks until "che parche" is detected."""
-    wakeword_model.reset()
-    frame_ms = OWW_CHUNK_SAMPLES * 1000 // OWW_SAMPLE_RATE
-    with closing(_frames_at_rate(MIC_DEVICE, OWW_SAMPLE_RATE, frame_ms)) as frames:
-        for frame in frames:
-            pcm = np.frombuffer(frame, dtype=np.int16)
-            scores = wakeword_model.predict(pcm)
-            if any(score >= OWW_THRESHOLD for score in scores.values()):
-                return
-
-
-# ── Mic capture + VAD (blocking, runs in a worker thread) ──────────────────
-
-def capture_utterance() -> bytes | None:
-    """Blocks until a full utterance (speech onset -> trailing silence) is captured."""
-    vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
-    triggered = False
-    num_voiced = 0
-    num_silence = 0
-    voiced_frames: list[bytes] = []
-
-    with closing(_frames_at_rate(MIC_DEVICE, MIC_SAMPLE_RATE, FRAME_MS)) as frames:
-        for frame in frames:
-            is_speech = vad.is_speech(frame, MIC_SAMPLE_RATE)
-
-            if not triggered:
-                if is_speech:
-                    num_voiced += 1
-                    voiced_frames.append(frame)
-                    if num_voiced >= SPEECH_START_FRAMES:
-                        triggered = True
-                        num_silence = 0
-                else:
-                    num_voiced = 0
-                    voiced_frames.clear()
-            else:
-                voiced_frames.append(frame)
-                if is_speech:
-                    num_silence = 0
-                else:
-                    num_silence += 1
-                    if num_silence >= SPEECH_END_FRAMES:
-                        break
-
-    audio = b"".join(voiced_frames)
-    if len(audio) < MIN_UTTERANCE_BYTES:
-        return None
-    return audio
-
-
-def _pcm_to_wav(pcm: bytes, sample_rate: int) -> bytes:
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(pcm)
-    return buf.getvalue()
-
-
-def _transcribe_sync(pcm: bytes) -> str:
-    wav_bytes = _pcm_to_wav(pcm, MIC_SAMPLE_RATE)
-    resp = openai_client.audio.transcriptions.create(
-        model="whisper-1",
-        file=("utterance.wav", wav_bytes, "audio/wav"),
-        language=STT_LANGUAGE,
-    )
-    return resp.text
-
-
-async def transcribe(pcm: bytes) -> str:
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _transcribe_sync, pcm)
-
-
-# ── Hermes streaming chat ────────────────────────────────────────────────────
-
-async def stream_hermes(history: list[dict]) -> AsyncIterator[str]:
-    url = f"{HERMES_API_URL}/v1/chat/completions"
-    headers = {"Content-Type": "application/json"}
-    if HERMES_API_KEY:
-        headers["Authorization"] = f"Bearer {HERMES_API_KEY}"
-    payload = {"model": "hermes", "messages": history, "stream": True}
-
-    async with httpx.AsyncClient(timeout=None) as client:
-        async with client.stream("POST", url, headers=headers, json=payload) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                line = line.strip()
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line[len("data:"):].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    parsed = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                delta = parsed.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                if delta:
-                    yield delta
-
-
-def extract_sentences(buffer: str) -> tuple[list[str], str]:
-    """Splits complete sentences off the front of `buffer`, returns (sentences, remainder)."""
-    sentences = []
-    last_end = 0
-    for m in SENTENCE_BOUNDARY.finditer(buffer):
-        sentence = buffer[last_end:m.end()].strip()
-        if sentence:
-            sentences.append(sentence)
-        last_end = m.end()
-    return sentences, buffer[last_end:]
-
-
-# ── ElevenLabs TTS + ordered playback ────────────────────────────────────────
-# Trying ElevenLabs instead of OpenAI for TTS — better native Latin American
-# Spanish voices. OpenAI version kept below, commented, in case we revert.
-
-# def _synthesize_sync(text: str) -> bytes:
-#     resp = openai_client.audio.speech.create(
-#         model=TTS_MODEL, voice=TTS_VOICE, input=text, response_format="pcm",
-#     )
-#     return resp.content
-
-
-def _synthesize_sync(text: str) -> bytes:
-    resp = httpx.post(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
-        headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
-        params={"output_format": f"pcm_{TTS_SAMPLE_RATE}"},
-        json={"text": text, "model_id": ELEVENLABS_MODEL_ID},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.content
-
-
-async def synthesize(text: str) -> bytes:
-    loop = asyncio.get_running_loop()
-    try:
-        return await loop.run_in_executor(None, _synthesize_sync, text)
-    except Exception:
-        log.exception("TTS failed for sentence: %r", text)
-        return b""
-
-
-# Some hardware (HDMI/certain USB DACs) rejects our mono TTS audio outright —
-# either the sample format or (more often) mono itself isn't supported, both
-# surfacing as PortAudio "Sample format not supported". Rather than guess
-# which, try a short list of (channels, dtype) configs and remember whichever
-# one works per device, so later calls skip straight to it.
 _PLAYBACK_CONFIGS: list[tuple[int, str]] = [
     (1, "int16"),
     (2, "int16"),
@@ -329,7 +201,6 @@ _PLAYBACK_CONFIGS: list[tuple[int, str]] = [
     (2, "float32"),
     (2, "int32"),
 ]
-
 _output_config_cache: dict[str | int | None, tuple[int, str]] = {}
 
 
@@ -345,138 +216,257 @@ def _prepare_output_audio(int16_mono: np.ndarray, channels: int, dtype: str) -> 
     return np.column_stack([data, data]) if channels == 2 else data
 
 
-def _play_pcm_sync(pcm: bytes) -> None:
-    if not pcm:
-        return
+def _open_output_stream() -> tuple[sd.OutputStream, int, int, str]:
+    """Opens a persistent output stream for continuous realtime playback,
+    trying candidate (channels, dtype) configs until one is accepted."""
     native_rate = _query_native_rate(SPEAKER_DEVICE, "output")
-    if native_rate != TTS_SAMPLE_RATE:
-        pcm, _ = audioop.ratecv(pcm, 2, 1, TTS_SAMPLE_RATE, native_rate, None)
-    int16_mono = np.frombuffer(pcm, dtype=np.int16)
-
     cached = _output_config_cache.get(SPEAKER_DEVICE)
     candidates = [cached] if cached else _PLAYBACK_CONFIGS
 
     last_err: Exception | None = None
     for channels, dtype in candidates:
-        audio = _prepare_output_audio(int16_mono, channels, dtype)
         try:
-            sd.play(audio, samplerate=native_rate, device=SPEAKER_DEVICE)
-            sd.wait()
+            stream = sd.OutputStream(
+                samplerate=native_rate, channels=channels, dtype=dtype, device=SPEAKER_DEVICE,
+            )
+            stream.start()
             _output_config_cache[SPEAKER_DEVICE] = (channels, dtype)
-            return
+            return stream, native_rate, channels, dtype
         except sd.PortAudioError as e:
             last_err = e
             log.warning("playback config channels=%d dtype=%s rejected: %s", channels, dtype, e)
-
     raise last_err
 
 
-async def fill_tts_future(sentence: str, future: asyncio.Future) -> None:
-    pcm = await synthesize(sentence)
-    if not future.done():
-        future.set_result(pcm)
+# ── Wake word (blocking, runs in a worker thread) ───────────────────────────
+
+def wait_for_wake_word() -> None:
+    """Blocks until "che parche" is detected."""
+    wakeword_model.reset()
+    frame_ms = OWW_CHUNK_SAMPLES * 1000 // OWW_SAMPLE_RATE
+    for frame in _frames_at_rate(MIC_DEVICE, OWW_SAMPLE_RATE, frame_ms):
+        pcm = np.frombuffer(frame, dtype=np.int16)
+        scores = wakeword_model.predict(pcm)
+        if any(score >= OWW_THRESHOLD for score in scores.values()):
+            return
 
 
-async def playback_worker(queue: asyncio.Queue) -> None:
-    """Plays audio futures strictly in order, regardless of TTS completion order."""
+# ── Hermes bridge (blocking, runs in a worker thread) ───────────────────────
+
+def _ask_hermes_sync(prompt: str) -> str:
+    url = f"{HERMES_API_URL}/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if HERMES_API_KEY:
+        headers["Authorization"] = f"Bearer {HERMES_API_KEY}"
+    payload = {"model": "hermes", "messages": [{"role": "user", "content": prompt}], "stream": False}
+    resp = httpx.post(url, headers=headers, json=payload, timeout=120)
+    resp.raise_for_status()
+    data = resp.json()
+    return data["choices"][0]["message"]["content"]
+
+
+async def ask_hermes(prompt: str) -> str:
     loop = asyncio.get_running_loop()
-    first_chunk = True
-    while True:
-        future = await queue.get()
-        if future is None:
-            break
-        pcm = await future
-        if first_chunk and pcm:
-            await set_status("talking")
-            first_chunk = False
-        await loop.run_in_executor(None, _play_pcm_sync, pcm)
-
-
-async def speak_turn(history: list[dict]) -> str:
-    """Streams Hermes's reply, speaking it sentence-by-sentence as it arrives.
-    Cancellable — see cancel_current_turn()."""
-    queue: asyncio.Queue = asyncio.Queue()
-    playback_task = asyncio.create_task(playback_worker(queue))
-    tts_tasks: list[asyncio.Task] = []
-
-    buffer = ""
-    full_reply = ""
-
-    async def schedule(sentence: str) -> None:
-        future = asyncio.get_running_loop().create_future()
-        await queue.put(future)
-        tts_tasks.append(asyncio.create_task(fill_tts_future(sentence, future)))
-
     try:
-        async for delta in stream_hermes(history):
-            buffer += delta
-            full_reply += delta
-            sentences, buffer = extract_sentences(buffer)
-            for sentence in sentences:
-                await schedule(sentence)
-
-        if buffer.strip():
-            await schedule(buffer)
-
-        await queue.put(None)
-        await playback_task
-        return full_reply
-    except asyncio.CancelledError:
-        sd.stop()  # unblocks _play_pcm_sync's sd.wait() in the executor thread right away
-        for t in tts_tasks:
-            t.cancel()
-        playback_task.cancel()
-        raise
+        return await loop.run_in_executor(None, _ask_hermes_sync, prompt)
+    except Exception:
+        log.exception("ask_hermes failed for prompt: %r", prompt)
+        return "No pude conectarme con Hermes ahora, intentemos de nuevo en un rato."
 
 
-# ── Main conversation loop ───────────────────────────────────────────────────
+# ── Realtime session ─────────────────────────────────────────────────────────
 
-async def conversation_loop() -> None:
-    global current_turn_task
-    loop = asyncio.get_running_loop()
-    history: list[dict] = []
+class RealtimeSession:
+    """Owns the audio in/out threads and event handling for one connection to
+    the OpenAI Realtime API."""
 
-    while True:
+    def __init__(self, ws: websockets.WebSocketClientProtocol) -> None:
+        self.ws = ws
+        self.loop = asyncio.get_running_loop()
+        self.mic_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        self.playback_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self.stop_event = threading.Event()
+        self.awaiting_hermes = False
+        self.speaking = False
+        self.output_stream: sd.OutputStream | None = None
+
+    def start_audio_threads(self) -> None:
+        threading.Thread(target=self._mic_thread, daemon=True).start()
+        threading.Thread(target=self._playback_thread, daemon=True).start()
+
+    def stop_audio_threads(self) -> None:
+        self.stop_event.set()
+        self.playback_queue.put_nowait(None)
+
+    def _mic_thread(self) -> None:
+        for frame in _frames_at_rate(MIC_DEVICE, REALTIME_SAMPLE_RATE, MIC_FRAME_MS):
+            if self.stop_event.is_set():
+                return
+            self.loop.call_soon_threadsafe(self.mic_queue.put_nowait, frame)
+
+    def _playback_thread(self) -> None:
+        stream, native_rate, channels, dtype = _open_output_stream()
+        self.output_stream = stream
+        state = None
         try:
-            if WAKE_WORD_ENABLED:
-                await set_status("idle")
-                await loop.run_in_executor(None, wait_for_wake_word)
+            while True:
+                fut = asyncio.run_coroutine_threadsafe(self.playback_queue.get(), self.loop)
+                pcm = fut.result()
+                if pcm is None or self.stop_event.is_set():
+                    return
+                if native_rate != REALTIME_SAMPLE_RATE:
+                    pcm, state = audioop.ratecv(pcm, 2, 1, REALTIME_SAMPLE_RATE, native_rate, state)
+                int16_mono = np.frombuffer(pcm, dtype=np.int16)
+                audio = _prepare_output_audio(int16_mono, channels, dtype)
+                try:
+                    stream.write(audio)
+                except sd.PortAudioError:
+                    # stream was aborted by interrupt_playback() — reactivate and drop this chunk
+                    stream.start()
+        finally:
+            stream.stop()
+            stream.close()
 
-            await set_status("listening")
-            pcm = await loop.run_in_executor(None, capture_utterance)
-            if not pcm:
-                continue
-
-            await set_status("thinking")
-            text = await transcribe(pcm)
-            if not text.strip():
-                continue
-            log.info("user: %s", text)
-
-            history.append({"role": "user", "content": text})
-            current_turn_task = asyncio.create_task(speak_turn(history))
+    def interrupt_playback(self) -> None:
+        """Drops anything queued/currently playing — used on cancel and on
+        server-detected barge-in (user starts talking over the assistant).
+        `sd.stop()` only affects streams opened via the sd.play()/sd.rec()
+        shortcuts, not our own explicit sd.OutputStream — has to be aborted
+        directly."""
+        while not self.playback_queue.empty():
             try:
-                reply = await current_turn_task
-            except asyncio.CancelledError:
-                log.info("turn cancelled")
-                history.pop()
-                continue
-            finally:
-                current_turn_task = None
+                self.playback_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        if self.output_stream is not None:
+            try:
+                self.output_stream.abort()
+            except sd.PortAudioError:
+                pass
 
-            log.info("hermes: %s", reply)
-            history.append({"role": "assistant", "content": reply})
-            history[:] = history[-HISTORY_LIMIT:]
+    async def send_mic_audio(self) -> None:
+        while True:
+            frame = await self.mic_queue.get()
+            b64 = base64.b64encode(frame).decode("ascii")
+            await self.ws.send(json.dumps({"type": "input_audio_buffer.append", "audio": b64}))
 
-        except Exception:
-            log.exception("turn failed, resetting to listening")
-            await asyncio.sleep(0.5)
+    async def handle_event(self, event: dict[str, Any]) -> None:
+        etype = event.get("type")
 
+        if etype == "input_audio_buffer.speech_started":
+            if self.speaking:
+                self.interrupt_playback()  # user is barging in over the assistant
+                self.speaking = False
+            await set_status("listening")
+
+        elif etype == "response.audio.delta":
+            pcm = base64.b64decode(event["delta"])
+            self.playback_queue.put_nowait(pcm)
+            if not self.speaking:
+                self.speaking = True
+                await set_status("talking")
+
+        elif etype == "response.function_call_arguments.done":
+            if event.get("name") == "ask_hermes":
+                call_id = event["call_id"]
+                try:
+                    args = json.loads(event.get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                prompt = args.get("prompt", "")
+                self.awaiting_hermes = True
+                await set_status("thinking")
+                asyncio.create_task(self._resolve_hermes_call(call_id, prompt))
+
+        elif etype == "response.done":
+            self.speaking = False
+            if not self.awaiting_hermes:
+                await set_status("listening")
+
+        elif etype == "error":
+            log.warning("realtime API error: %s", event)
+
+    async def _resolve_hermes_call(self, call_id: str, prompt: str) -> None:
+        log.info("ask_hermes: %s", prompt)
+        reply = await ask_hermes(prompt)
+        log.info("hermes: %s", reply)
+        if not self.awaiting_hermes:
+            return  # cancelled while Hermes was thinking — drop the result
+        self.awaiting_hermes = False
+        await self.ws.send(json.dumps({
+            "type": "conversation.item.create",
+            "item": {"type": "function_call_output", "call_id": call_id, "output": reply},
+        }))
+        await self.ws.send(json.dumps({"type": "response.create"}))
+
+    async def cancel(self) -> None:
+        self.interrupt_playback()
+        self.awaiting_hermes = False
+        await self.ws.send(json.dumps({"type": "response.cancel"}))
+        await set_status("listening")
+
+
+def _session_update_payload() -> dict[str, Any]:
+    return {
+        "type": "session.update",
+        "session": {
+            "modalities": ["audio", "text"],
+            "instructions": REALTIME_INSTRUCTIONS,
+            "voice": REALTIME_VOICE,
+            "input_audio_format": "pcm16",
+            "output_audio_format": "pcm16",
+            "turn_detection": {"type": "server_vad"},
+            "tools": [ASK_HERMES_TOOL],
+            "tool_choice": "auto",
+        },
+    }
+
+
+async def run_realtime_session() -> None:
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "OpenAI-Beta": "realtime=v1"}
+    async with websockets.connect(REALTIME_WS_URL, additional_headers=headers) as ws:
+        await ws.send(json.dumps(_session_update_payload()))
+
+        session = RealtimeSession(ws)
+        session.start_audio_threads()
+        await set_status("listening")
+
+        sender_task = asyncio.create_task(session.send_mic_audio())
+        canceller_task = asyncio.create_task(_watch_for_cancel(session))
+        try:
+            async for raw in ws:
+                await session.handle_event(json.loads(raw))
+        finally:
+            sender_task.cancel()
+            canceller_task.cancel()
+            session.stop_audio_threads()
+
+
+async def _watch_for_cancel(session: RealtimeSession) -> None:
+    while True:
+        await cancel_event.wait()
+        cancel_event.clear()
+        await session.cancel()
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
 
 async def main() -> None:
     async with websockets.serve(status_handler, STATUS_WS_HOST, STATUS_WS_PORT):
         log.info("status WS listening on %s:%d", STATUS_WS_HOST, STATUS_WS_PORT)
-        await conversation_loop()
+
+        if WAKE_WORD_ENABLED:
+            await set_status("idle")
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, wait_for_wake_word)
+
+        while True:
+            try:
+                await run_realtime_session()
+            except Exception:
+                log.exception("realtime session dropped, reconnecting")
+                await set_status("idle" if WAKE_WORD_ENABLED else "listening")
+                await asyncio.sleep(2)
 
 
 if __name__ == "__main__":
