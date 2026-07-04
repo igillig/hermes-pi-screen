@@ -6,7 +6,10 @@
 # depends on (card 2 on this Pi — check /proc/asound/cards if that changes).
 set -e
 
-pulseaudio --start --exit-idle-time=-1 --log-target=stderr
+# --system: the container runs as root, and PulseAudio's normal per-user mode
+# (what --start assumes) refuses to run as root at all. No
+# --disallow-module-loading, since we need pactl load-module to work below.
+pulseaudio --system --daemonize=true --disallow-exit --exit-idle-time=-1 --log-target=stderr
 sleep 2
 
 # Physical hardware, direct ALSA (bypasses the asound.conf "default" combo —
