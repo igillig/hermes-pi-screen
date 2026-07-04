@@ -109,11 +109,9 @@ VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.7"))
 MIC_FRAME_MS = 100  # chunk size fed to the Realtime API's input audio buffer;
 # bigger than the API's own minimum to cut down how often we hop threads /
 # hit the network per second on the Pi's limited CPU (was 20ms — 5x the rate).
-# Fallback only — with module-echo-cancel (docker-entrypoint.sh) actually
-# filtering Parche's own voice out of the mic, this shouldn't be needed and
-# defaults off so barge-in (interrupting mid-response) works. Flip to true if
-# AEC isn't cutting it on your hardware and you'd rather trade barge-in away
-# for stability again.
+# Off by default — needs to stay possible to interrupt Parche mid-response.
+# Only turn this on if VAD_THRESHOLD alone isn't enough and you'd rather trade
+# barge-in away for stability.
 MIC_MUTE_WHILE_SPEAKING = os.getenv("MIC_MUTE_WHILE_SPEAKING", "false").lower() == "true"
 MIC_UNMUTE_DELAY_S = float(os.getenv("MIC_UNMUTE_DELAY_S", "0.4"))  # see mic_muted above
 

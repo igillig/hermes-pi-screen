@@ -64,11 +64,12 @@ services:
       HERMES_API_KEY: ${HERMES_API_KEY}
       STATUS_WS_HOST: 0.0.0.0
       STATUS_WS_PORT: 8765
-      # Names of the PulseAudio virtual devices docker-entrypoint.sh creates via
-      # module-echo-cancel (WebRTC AEC3) — the mic capture that reaches
-      # sounddevice already has Parche's own voice filtered out.
+      # Left unset: resolves to the ALSA "default" PCM, which asound.conf routes
+      # to this Pi's actual mic/speaker hardware (see that file for the specific
+      # cards/devices).
       MIC_DEVICE: ${MIC_DEVICE:-}
       SPEAKER_DEVICE: ${SPEAKER_DEVICE:-}
+      VAD_THRESHOLD: ${VAD_THRESHOLD:-0.7}
       # Wake word stays off until a custom model is trained and dropped into
       # ./orchestrator/models (see orchestrator/.env.example).
       WAKE_WORD_ENABLED: ${WAKE_WORD_ENABLED:-false}
