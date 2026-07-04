@@ -25,7 +25,6 @@ import queue
 import threading
 from typing import Any
 
-import httpx
 import numpy as np
 import sounddevice as sd
 import websockets
@@ -42,7 +41,15 @@ log = logging.getLogger("orchestrator")
 
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 HERMES_API_URL = os.getenv("HERMES_API_URL", "http://localhost:8000").rstrip("/")
-HERMES_API_KEY = os.getenv("HERMES_API_KEY", "")
+# The gateway WS (same channel Telegram uses, tools/skills enabled) — NOT the
+# plain REST API, which answers as a bare LLM with no tools at all. Derived
+# from HERMES_API_URL by default; override directly if the gateway lives at a
+# different host/port than the REST API. No auth token wired in yet — add one
+# here (header or ?internal= query param, matching whatever the gateway
+# expects) if it turns out to reject unauthenticated same-network connections.
+HERMES_WS_URL = os.getenv("HERMES_WS_URL") or (
+    HERMES_API_URL.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
+)
 
 STATUS_WS_HOST = os.getenv("STATUS_WS_HOST", "0.0.0.0")
 STATUS_WS_PORT = int(os.getenv("STATUS_WS_PORT", "8765"))
@@ -287,26 +294,49 @@ def wait_for_wake_word() -> None:
             return
 
 
-# ── Hermes bridge (blocking, runs in a worker thread) ───────────────────────
-
-def _ask_hermes_sync(prompt: str) -> str:
-    url = f"{HERMES_API_URL}/v1/chat/completions"
-    headers = {"Content-Type": "application/json"}
-    if HERMES_API_KEY:
-        headers["Authorization"] = f"Bearer {HERMES_API_KEY}"
-    payload = {"model": "hermes", "messages": [{"role": "user", "content": prompt}], "stream": False}
-    resp = httpx.post(url, headers=headers, json=payload, timeout=120)
-    resp.raise_for_status()
-    data = resp.json()
-    return data["choices"][0]["message"]["content"]
-
+# ── Hermes bridge — gateway WebSocket, not the plain REST API ──────────────
+# The REST /v1/chat/completions endpoint answers as a bare LLM: no tools, no
+# skills, can't actually turn anything on. Only the gateway WS (same channel
+# Telegram uses) runs with tools enabled. Same JSON-RPC-ish protocol the old
+# browser hook (useHermesWS.ts, pre-Realtime-API) used: wait for
+# gateway.ready, create a session, submit the prompt, collect message.delta
+# until message.complete.
 
 async def ask_hermes(prompt: str) -> str:
-    loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(None, _ask_hermes_sync, prompt)
+        async with websockets.connect(HERMES_WS_URL) as ws:
+            session_id: str | None = None
+            accumulated = ""
+
+            async for raw in ws:
+                for line in raw.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    msg = json.loads(line)
+                    method = msg.get("method")
+                    mtype = (msg.get("params") or {}).get("type")
+
+                    if method == "event" and mtype == "gateway.ready":
+                        await ws.send(json.dumps({
+                            "id": 0, "method": "session.create", "params": {"title": "parche-orchestrator"},
+                        }) + "\n")
+
+                    elif msg.get("id") == 0 and msg.get("result"):
+                        session_id = msg["result"].get("session_id")
+                        await ws.send(json.dumps({
+                            "id": 1, "method": "prompt.submit",
+                            "params": {"content": prompt, "session_id": session_id},
+                        }) + "\n")
+
+                    elif method == "event" and mtype == "message.delta":
+                        accumulated += (msg.get("params", {}).get("payload") or {}).get("text", "")
+
+                    elif method == "event" and mtype == "message.complete":
+                        payload = msg.get("params", {}).get("payload") or {}
+                        return payload.get("text") or accumulated
     except Exception:
-        log.exception("ask_hermes failed for prompt: %r", prompt)
+        log.exception("ask_hermes (gateway) failed for prompt: %r", prompt)
         return "No pude conectarme con Hermes ahora, intentemos de nuevo en un rato."
 
 
