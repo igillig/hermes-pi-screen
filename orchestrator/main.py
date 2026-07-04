@@ -341,15 +341,14 @@ async def _ask_hermes_ws(prompt: str) -> str:
         log.info("hermes gateway: connected")
         accumulated = ""
         session_id: str | None = None
-        # A brand-new session sends an unprompted `session.info` event ~500ms
-        # after session.create's result, on its own — sending prompt.submit
-        # before that arrives seems to get the message silently dropped/
-        # unattached (every reply since started "the user hasn't said
-        # anything yet", even with an explicit 500ms wait beforehand — this
-        # is the one thing we haven't tried: gating on the real signal instead
-        # of a guessed delay). Ignore any message.delta/message.complete until
-        # our prompt.submit has actually gone out, so we don't return
-        # whatever unprompted turn happens before that either.
+        # Every freshly created session fires ONE automatic/spontaneous turn
+        # of its own (message.start...message.complete, generic "how can I
+        # help you" filler) no matter what we do or when we send prompt.submit
+        # — racing it (immediately, after a delay, after session.info) always
+        # lost, our real prompt kept getting ignored in favor of that turn.
+        # So stop racing it: let it finish, THEN submit our real prompt as a
+        # second turn in the same now-warmed-up session.
+        auto_turn_done = False
         prompt_submitted = False
 
         async for raw in ws:
@@ -375,7 +374,10 @@ async def _ask_hermes_ws(prompt: str) -> str:
                 elif msg.get("id") == 0 and msg.get("result"):
                     session_id = msg["result"].get("session_id")
 
-                elif not prompt_submitted and method == "event" and mtype == "session.info":
+                elif not auto_turn_done and method == "event" and mtype == "message.complete":
+                    # The automatic greeting turn just finished — discard its
+                    # text, now submit the real prompt as the next turn.
+                    auto_turn_done = True
                     await ws.send(json.dumps({
                         "id": 1, "method": "prompt.submit",
                         "params": {"content": prompt, "session_id": session_id},
