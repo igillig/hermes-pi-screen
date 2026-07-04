@@ -64,11 +64,10 @@ services:
       HERMES_API_KEY: ${HERMES_API_KEY}
       STATUS_WS_HOST: 0.0.0.0
       STATUS_WS_PORT: 8765
-      # Names of the PulseAudio virtual devices docker-entrypoint.sh creates via
-      # module-echo-cancel (WebRTC AEC3) — the mic capture that reaches
-      # sounddevice already has Parche's own voice filtered out.
-      MIC_DEVICE: ${MIC_DEVICE:-echo_cancelled_mic}
-      SPEAKER_DEVICE: ${SPEAKER_DEVICE:-echo_cancelled_speaker}
+      MIC_DEVICE: ${MIC_DEVICE:-}
+      SPEAKER_DEVICE: ${SPEAKER_DEVICE:-}
+      VAD_THRESHOLD: ${VAD_THRESHOLD:-0.7}
+      MIC_MUTE_WHILE_SPEAKING: ${MIC_MUTE_WHILE_SPEAKING:-false}
       # Wake word stays off until a custom model is trained and dropped into
       # ./orchestrator/models (see orchestrator/.env.example).
       WAKE_WORD_ENABLED: ${WAKE_WORD_ENABLED:-false}

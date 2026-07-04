@@ -103,11 +103,17 @@ SPEAKER_DEVICE = os.getenv("SPEAKER_DEVICE") or None
 MIC_FRAME_MS = 100  # chunk size fed to the Realtime API's input audio buffer;
 # bigger than the API's own minimum to cut down how often we hop threads /
 # hit the network per second on the Pi's limited CPU (was 20ms — 5x the rate).
-# Fallback only — with module-echo-cancel (docker-entrypoint.sh) actually
-# filtering Parche's own voice out of the mic, this shouldn't be needed and
-# defaults off so barge-in (interrupting mid-response) works. Flip to true if
-# AEC isn't cutting it on your hardware and you'd rather trade barge-in away
-# for stability again.
+
+# No acoustic echo cancellation on this hardware, so without a properly
+# isolated mic the server VAD can pick up Parche's own voice from the speaker
+# and mistake it for the user talking. First line of defense: raise the VAD's
+# sensitivity threshold (0-1, API default ~0.5) so quieter echo bleed-through
+# doesn't count as speech while actual close-mic speaking still does.
+VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.7"))
+
+# Off by default — needs to stay possible to interrupt Parche mid-response.
+# Only turn this on if VAD_THRESHOLD alone isn't enough and you'd rather trade
+# barge-in away for stability.
 MIC_MUTE_WHILE_SPEAKING = os.getenv("MIC_MUTE_WHILE_SPEAKING", "false").lower() == "true"
 MIC_UNMUTE_DELAY_S = float(os.getenv("MIC_UNMUTE_DELAY_S", "0.4"))  # see mic_muted above
 
@@ -433,8 +439,8 @@ class RealtimeSession:
 
         if etype == "input_audio_buffer.speech_started":
             if self.speaking:
-                # Real barge-in (AEC keeps this from firing on Parche's own
-                # echo) — the user started talking over the assistant, stop.
+                # Barge-in — with MIC_MUTE_WHILE_SPEAKING on (default), this
+                # shouldn't normally fire while speaking; kept as a safety net.
                 self.interrupt_playback()
                 self.speaking = False
             await set_status("listening")
@@ -506,7 +512,7 @@ def _session_update_payload() -> dict[str, Any]:
             "audio": {
                 "input": {
                     "format": {"type": "audio/pcm", "rate": REALTIME_SAMPLE_RATE},
-                    "turn_detection": {"type": "server_vad"},
+                    "turn_detection": {"type": "server_vad", "threshold": VAD_THRESHOLD},
                 },
                 "output": {
                     "format": {"type": "audio/pcm", "rate": REALTIME_SAMPLE_RATE},
