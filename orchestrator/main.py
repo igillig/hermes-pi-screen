@@ -369,6 +369,14 @@ async def _ask_hermes_ws(prompt: str) -> str:
 
                 elif msg.get("id") == 0 and msg.get("result"):
                     session_id = msg["result"].get("session_id")
+                    # NOTE: Hermes acks this (id:1, "status": "streaming") but
+                    # every turn since comes back reasoning "the user hasn't
+                    # said anything yet" — a 500ms delay before sending this
+                    # (ruling out a lazy-session-init race) made no difference.
+                    # params.content matches both the old useHermesWS.ts
+                    # protocol and Hermes's own just-confirmed example, so the
+                    # field name looks right too. Root cause is still open —
+                    # see conversation notes.
                     await ws.send(json.dumps({
                         "id": 1, "method": "prompt.submit",
                         "params": {"content": prompt, "session_id": session_id},
