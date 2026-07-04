@@ -362,8 +362,10 @@ async def _ask_hermes_ws(prompt: str) -> str:
                     }) + "\n")
 
                 elif msg.get("id") == 0 and msg.get("result"):
+                    session_id = msg["result"].get("session_id")
                     await ws.send(json.dumps({
-                        "id": 2, "method": "prompt.submit", "params": {"content": prompt},
+                        "id": 2, "method": "prompt.submit",
+                        "params": {"session_id": session_id, "content": prompt},
                     }) + "\n")
 
                 elif method == "event" and mtype == "message.delta":
