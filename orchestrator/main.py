@@ -103,6 +103,7 @@ SPEAKER_DEVICE = os.getenv("SPEAKER_DEVICE") or None
 MIC_FRAME_MS = 100  # chunk size fed to the Realtime API's input audio buffer;
 # bigger than the API's own minimum to cut down how often we hop threads /
 # hit the network per second on the Pi's limited CPU (was 20ms — 5x the rate).
+MIC_UNMUTE_DELAY_S = float(os.getenv("MIC_UNMUTE_DELAY_S", "0.4"))  # see mic_muted above
 
 # Wake word ("che parche"), via openWakeWord — see orchestrator/.env.example for
 # how to train the custom model. Disabled by default: until the custom model is
@@ -317,6 +318,13 @@ class RealtimeSession:
         self.stop_event = threading.Event()
         self.awaiting_hermes = False
         self.speaking = False
+        # Half-duplex mic muting: no acoustic echo cancellation on this hardware
+        # (raw ALSA, not WebRTC), so without a properly isolated mic/headset the
+        # server VAD picks up Parche's own voice from the speaker and starts
+        # phantom turns. Dropping mic frames while speaking (+ a short grace
+        # period after) avoids that at the cost of not being able to barge in
+        # mid-response.
+        self.mic_muted = False
         self.output_stream: sd.OutputStream | None = None
 
     def start_audio_threads(self) -> None:
@@ -393,11 +401,17 @@ class RealtimeSession:
         sent = 0
         while True:
             frame = await self.mic_queue.get()
+            if self.mic_muted:
+                continue  # half-duplex: don't feed our own echo back while/just after talking
             b64 = base64.b64encode(frame).decode("ascii")
             await self.ws.send(json.dumps({"type": "input_audio_buffer.append", "audio": b64}))
             sent += 1
             if sent % 250 == 0:
                 log.info("sent %d audio chunks to the realtime API so far", sent)
+
+    async def _unmute_mic_after_delay(self) -> None:
+        await asyncio.sleep(MIC_UNMUTE_DELAY_S)
+        self.mic_muted = False
 
     async def handle_event(self, event: dict[str, Any]) -> None:
         etype = event.get("type")
@@ -406,7 +420,9 @@ class RealtimeSession:
 
         if etype == "input_audio_buffer.speech_started":
             if self.speaking:
-                self.interrupt_playback()  # user is barging in over the assistant
+                # Shouldn't normally happen with the mic muted while speaking —
+                # kept as a safety net in case some echo still slips through.
+                self.interrupt_playback()
                 self.speaking = False
             await set_status("listening")
 
@@ -415,6 +431,7 @@ class RealtimeSession:
             self.playback_queue.put_nowait(pcm)
             if not self.speaking:
                 self.speaking = True
+                self.mic_muted = True
                 await set_status("talking")
 
         elif etype == "response.output_audio_transcript.done":
@@ -434,6 +451,7 @@ class RealtimeSession:
 
         elif etype == "response.done":
             self.speaking = False
+            asyncio.create_task(self._unmute_mic_after_delay())
             if not self.awaiting_hermes:
                 await set_status("listening")
 
@@ -456,6 +474,8 @@ class RealtimeSession:
     async def cancel(self) -> None:
         self.interrupt_playback()
         self.awaiting_hermes = False
+        self.speaking = False
+        self.mic_muted = False
         await self.ws.send(json.dumps({"type": "response.cancel"}))
         await set_status("listening")
 
