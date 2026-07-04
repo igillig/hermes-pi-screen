@@ -100,6 +100,12 @@ ASK_HERMES_TOOL = {
 
 MIC_DEVICE = os.getenv("MIC_DEVICE") or None
 SPEAKER_DEVICE = os.getenv("SPEAKER_DEVICE") or None
+
+# Raises the server VAD's sensitivity threshold (0-1, API default ~0.5) so
+# quiet echo bleed-through doesn't count as speech while actual close-mic
+# talking still does — first line of defense against self-answer loops,
+# tried before giving up barge-in via MIC_MUTE_WHILE_SPEAKING.
+VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.7"))
 MIC_FRAME_MS = 100  # chunk size fed to the Realtime API's input audio buffer;
 # bigger than the API's own minimum to cut down how often we hop threads /
 # hit the network per second on the Pi's limited CPU (was 20ms — 5x the rate).
@@ -506,7 +512,7 @@ def _session_update_payload() -> dict[str, Any]:
             "audio": {
                 "input": {
                     "format": {"type": "audio/pcm", "rate": REALTIME_SAMPLE_RATE},
-                    "turn_detection": {"type": "server_vad"},
+                    "turn_detection": {"type": "server_vad", "threshold": VAD_THRESHOLD},
                 },
                 "output": {
                     "format": {"type": "audio/pcm", "rate": REALTIME_SAMPLE_RATE},
