@@ -60,11 +60,15 @@ export function useOrchestratorStatus() {
     }
   }, [connect])
 
-  const cancel = useCallback(() => {
+  const sendAction = useCallback((action: 'cancel' | 'start' | 'stop') => {
     if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ action: 'cancel' }))
+      ws.current.send(JSON.stringify({ action }))
     }
   }, [])
 
-  return { status, connected, cancel }
+  const cancel = useCallback(() => sendAction('cancel'), [sendAction])
+  const start  = useCallback(() => sendAction('start'), [sendAction])
+  const stop   = useCallback(() => sendAction('stop'), [sendAction])
+
+  return { status, connected, cancel, start, stop }
 }

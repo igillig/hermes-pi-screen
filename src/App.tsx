@@ -4,7 +4,8 @@ import { useOrchestratorStatus } from './hooks/useOrchestratorStatus'
 import { STRINGS } from './i18n/strings'
 
 export default function App() {
-  const { status: orbState, connected, cancel } = useOrchestratorStatus()
+  const { status: orbState, connected, cancel, start, stop } = useOrchestratorStatus()
+  const sessionActive = orbState !== 'idle'
 
   const [time, setTime] = useState(() => new Date())
   useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t) }, [])
@@ -29,6 +30,14 @@ export default function App() {
         </div>
 
         <div className="hud-center">
+          {connected && (
+            <button
+              className={`hud-session ${sessionActive ? 'stop' : 'start'}`}
+              onClick={sessionActive ? stop : start}
+            >
+              {sessionActive ? STRINGS.hud.stopSession : STRINGS.hud.startSession}
+            </button>
+          )}
           {orbState === 'thinking' && (
             <button className="hud-cancel" onClick={cancel}>{STRINGS.hud.cancel}</button>
           )}
@@ -37,9 +46,9 @@ export default function App() {
         <div className="hud-bottom">
           {!connected
             ? <span className="hud-hint">{STRINGS.hud.connecting}</span>
-            : orbState === 'idle'
-              ? <span className="hud-hint">{STRINGS.hud.wakeWordHint}</span>
-              : <span className={`hud-state ${orbState}`}>{STRINGS.orbState[orbState]}</span>
+            : sessionActive
+              ? <span className={`hud-state ${orbState}`}>{STRINGS.orbState[orbState]}</span>
+              : null
           }
         </div>
       </div>

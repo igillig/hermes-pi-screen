@@ -21,6 +21,7 @@ import base64
 import json
 import logging
 import os
+import queue
 import threading
 from typing import Any
 
@@ -99,7 +100,9 @@ ASK_HERMES_TOOL = {
 
 MIC_DEVICE = os.getenv("MIC_DEVICE") or None
 SPEAKER_DEVICE = os.getenv("SPEAKER_DEVICE") or None
-MIC_FRAME_MS = 20  # chunk size fed to the Realtime API's input audio buffer
+MIC_FRAME_MS = 100  # chunk size fed to the Realtime API's input audio buffer;
+# bigger than the API's own minimum to cut down how often we hop threads /
+# hit the network per second on the Pi's limited CPU (was 20ms — 5x the rate).
 
 # Wake word ("che parche"), via openWakeWord — see orchestrator/.env.example for
 # how to train the custom model. Disabled by default: until the custom model is
@@ -134,11 +137,33 @@ async def status_handler(websocket: websockets.WebSocketServerProtocol) -> None:
                 msg = json.loads(message)
             except json.JSONDecodeError:
                 continue
-            if msg.get("action") == "cancel":
+            action = msg.get("action")
+            if action == "cancel":
                 log.info("cancel requested from UI")
                 cancel_event.set()
+            elif action == "start":
+                start_session()
+            elif action == "stop":
+                stop_session()
     finally:
         clients.discard(websocket)
+
+
+current_session_task: asyncio.Task | None = None
+
+
+def start_session() -> None:
+    global current_session_task
+    if current_session_task is not None and not current_session_task.done():
+        return  # already running
+    log.info("session start requested from UI")
+    current_session_task = asyncio.get_event_loop().create_task(_session_runner())
+
+
+def stop_session() -> None:
+    if current_session_task is not None and not current_session_task.done():
+        log.info("session stop requested from UI")
+        current_session_task.cancel()
 
 
 async def set_status(status: str) -> None:
@@ -284,7 +309,11 @@ class RealtimeSession:
         self.ws = ws
         self.loop = asyncio.get_running_loop()
         self.mic_queue: asyncio.Queue[bytes] = asyncio.Queue()
-        self.playback_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        # Plain thread-safe queue, not asyncio.Queue — the playback thread reads
+        # from it with a native blocking get(), no cross-thread round-trip
+        # through the event loop per chunk (that was starving the loop enough
+        # to miss WebSocket keepalive pings and cause choppy/dropped audio).
+        self.playback_queue: queue.Queue[bytes | None] = queue.Queue()
         self.stop_event = threading.Event()
         self.awaiting_hermes = False
         self.speaking = False
@@ -308,7 +337,7 @@ class RealtimeSession:
                     return
                 self.loop.call_soon_threadsafe(self.mic_queue.put_nowait, frame)
                 sent += 1
-                if sent % 250 == 0:  # ~5s at 20ms frames, just a heartbeat
+                if sent % 50 == 0:  # ~5s at 100ms frames, just a heartbeat
                     log.info("mic thread alive: %d frames sent so far", sent)
         except Exception:
             log.exception("mic thread crashed")
@@ -324,8 +353,7 @@ class RealtimeSession:
         state = None
         try:
             while True:
-                fut = asyncio.run_coroutine_threadsafe(self.playback_queue.get(), self.loop)
-                pcm = fut.result()
+                pcm = self.playback_queue.get()
                 if pcm is None or self.stop_event.is_set():
                     log.info("playback thread stopping")
                     return
@@ -353,7 +381,7 @@ class RealtimeSession:
         while not self.playback_queue.empty():
             try:
                 self.playback_queue.get_nowait()
-            except asyncio.QueueEmpty:
+            except queue.Empty:
                 break
         if self.output_stream is not None:
             try:
@@ -388,6 +416,9 @@ class RealtimeSession:
             if not self.speaking:
                 self.speaking = True
                 await set_status("talking")
+
+        elif etype == "response.output_audio_transcript.done":
+            log.info("parche dice: %s", event.get("transcript"))
 
         elif etype == "response.function_call_arguments.done":
             if event.get("name") == "ask_hermes":
@@ -457,7 +488,12 @@ async def run_realtime_session() -> None:
     # No "OpenAI-Beta: realtime=v1" header — that opts into the old beta
     # session shape, which the GA API now rejects with beta_api_shape_disabled.
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
-    async with websockets.connect(REALTIME_WS_URL, additional_headers=headers) as ws:
+    # More lenient ping timeout — the Pi's event loop sharing a CPU with the
+    # resampling/audio threads can lag past the 20s default under load, which
+    # was closing the connection with "keepalive ping timeout".
+    async with websockets.connect(
+        REALTIME_WS_URL, additional_headers=headers, ping_interval=20, ping_timeout=60,
+    ) as ws:
         await ws.send(json.dumps(_session_update_payload()))
 
         session = RealtimeSession(ws)
@@ -483,11 +519,13 @@ async def _watch_for_cancel(session: RealtimeSession) -> None:
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
+# The realtime session is NOT started automatically — the mic stays fully
+# closed (no cost, nothing listening) until the UI sends {"action": "start"},
+# and {"action": "stop"} tears it down again. WAKE_WORD_ENABLED, once a model
+# is trained, will replace the manual button as the trigger for start_session().
 
-async def main() -> None:
-    async with websockets.serve(status_handler, STATUS_WS_HOST, STATUS_WS_PORT):
-        log.info("status WS listening on %s:%d", STATUS_WS_HOST, STATUS_WS_PORT)
-
+async def _session_runner() -> None:
+    try:
         if WAKE_WORD_ENABLED:
             await set_status("idle")
             loop = asyncio.get_running_loop()
@@ -496,10 +534,23 @@ async def main() -> None:
         while True:
             try:
                 await run_realtime_session()
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 log.exception("realtime session dropped, reconnecting")
-                await set_status("idle" if WAKE_WORD_ENABLED else "listening")
+                await set_status("idle")
                 await asyncio.sleep(2)
+    except asyncio.CancelledError:
+        log.info("session stopped")
+    finally:
+        await set_status("idle")
+
+
+async def main() -> None:
+    async with websockets.serve(status_handler, STATUS_WS_HOST, STATUS_WS_PORT):
+        log.info("status WS listening on %s:%d", STATUS_WS_HOST, STATUS_WS_PORT)
+        await set_status("idle")
+        await asyncio.Event().wait()  # everything else is driven by UI start/stop actions
 
 
 if __name__ == "__main__":

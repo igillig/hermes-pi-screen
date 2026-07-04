@@ -17,7 +17,9 @@ export const STRINGS = {
 
   hud: {
     connecting: 'CONNECTING...',
-    wakeWordHint: "DECÍ 'CHE PARCHE'",
+    wakeWordHint: "DECÍ 'CHE PARCHE'", // unused until wake word is trained/enabled again
+    startSession: 'EMPEZAR',
+    stopSession: 'CORTAR',
     cancel: 'CANCELAR',
   },
 } as const
