@@ -24,6 +24,7 @@ import os
 import queue
 import threading
 from typing import Any
+from urllib.parse import urlparse
 
 import numpy as np
 import sounddevice as sd
@@ -42,14 +43,14 @@ log = logging.getLogger("orchestrator")
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 HERMES_API_URL = os.getenv("HERMES_API_URL", "http://localhost:8000").rstrip("/")
 # The gateway WS (same channel Telegram uses, tools/skills enabled) — NOT the
-# plain REST API, which answers as a bare LLM with no tools at all. Derived
-# from HERMES_API_URL by default; override directly if the gateway lives at a
-# different host/port than the REST API. No auth token wired in yet — add one
-# here (header or ?internal= query param, matching whatever the gateway
-# expects) if it turns out to reject unauthenticated same-network connections.
-HERMES_WS_URL = os.getenv("HERMES_WS_URL") or (
-    HERMES_API_URL.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
-)
+# plain REST API (HERMES_API_URL, port 8000), which answers as a bare LLM with
+# no tools at all. Same host, but its own port/path — confirmed earlier in
+# this project from the old browser hook (useHermesWS.ts) that talked to
+# Hermes this same way. No auth token wired in yet — add one here (header or
+# ?internal= query param, matching whatever the gateway expects) if it turns
+# out to reject unauthenticated same-network connections.
+_HERMES_HOST = urlparse(HERMES_API_URL).hostname or "localhost"
+HERMES_WS_URL = os.getenv("HERMES_WS_URL", f"ws://{_HERMES_HOST}:9119/api/ws")
 
 STATUS_WS_HOST = os.getenv("STATUS_WS_HOST", "0.0.0.0")
 STATUS_WS_PORT = int(os.getenv("STATUS_WS_PORT", "8765"))
