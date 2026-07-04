@@ -336,7 +336,9 @@ async def _ask_hermes_ws(prompt: str) -> str:
     # "internal", not the token itself (our container's docker-network IP vs.
     # the Pi's LAN IP the direct test used).
     url = f"{HERMES_WS_URL}?internal={HERMES_WS_TOKEN}"
+    log.info("hermes gateway: connecting to %s", HERMES_WS_URL)
     async with websockets.connect(url) as ws:
+        log.info("hermes gateway: connected")
         accumulated = ""
 
         async for raw in ws:
@@ -347,6 +349,12 @@ async def _ask_hermes_ws(prompt: str) -> str:
                 msg = json.loads(line)
                 method = msg.get("method")
                 mtype = (msg.get("params") or {}).get("type")
+                # Full message, not just method/type — tool-call details (which
+                # tool, args, whether it actually ran vs errored) live in
+                # params/payload fields we don't otherwise parse, and this is
+                # the only way to see whether Hermes really executed something
+                # or is just claiming to.
+                log.info("hermes gateway message: %s", line[:2000])
 
                 if method == "event" and mtype == "gateway.ready":
                     await ws.send(json.dumps({
