@@ -358,14 +358,18 @@ async def _ask_hermes_ws(prompt: str) -> str:
 
                 if method == "event" and mtype == "gateway.ready":
                     await ws.send(json.dumps({
-                        "id": 0, "method": "session.create", "params": {"title": "parche-orchestrator"},
+                        "id": 0, "method": "session.create", "params": {"internal": True},
                     }) + "\n")
 
                 elif msg.get("id") == 0 and msg.get("result"):
                     session_id = msg["result"].get("session_id")
                     await ws.send(json.dumps({
                         "id": 2, "method": "prompt.submit",
-                        "params": {"session_id": session_id, "content": prompt},
+                        "params": {
+                            "session_id": session_id,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "internal": True,
+                        },
                     }) + "\n")
 
                 elif method == "event" and mtype == "message.delta":
