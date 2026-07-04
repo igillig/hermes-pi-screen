@@ -340,6 +340,12 @@ async def _ask_hermes_ws(prompt: str) -> str:
     async with websockets.connect(url) as ws:
         log.info("hermes gateway: connected")
         accumulated = ""
+        # Session creation seems to trigger an automatic idle/welcome turn on
+        # its own (Hermes's own reasoning literally said "the user hasn't said
+        # anything yet" once) — ignore any message.delta/message.complete that
+        # arrives before OUR prompt.submit actually goes out, so we don't
+        # return that greeting instead of the real answer.
+        prompt_submitted = False
 
         async for raw in ws:
             for line in raw.split("\n"):
@@ -367,11 +373,12 @@ async def _ask_hermes_ws(prompt: str) -> str:
                         "id": 1, "method": "prompt.submit",
                         "params": {"content": prompt, "session_id": session_id},
                     }) + "\n")
+                    prompt_submitted = True
 
-                elif method == "event" and mtype == "message.delta":
+                elif prompt_submitted and method == "event" and mtype == "message.delta":
                     accumulated += (msg.get("params", {}).get("payload") or {}).get("text", "")
 
-                elif method == "event" and mtype == "message.complete":
+                elif prompt_submitted and method == "event" and mtype == "message.complete":
                     payload = msg.get("params", {}).get("payload") or {}
                     return payload.get("text") or accumulated
     return accumulated
