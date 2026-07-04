@@ -340,11 +340,16 @@ async def _ask_hermes_ws(prompt: str) -> str:
     async with websockets.connect(url) as ws:
         log.info("hermes gateway: connected")
         accumulated = ""
-        # Session creation seems to trigger an automatic idle/welcome turn on
-        # its own (Hermes's own reasoning literally said "the user hasn't said
-        # anything yet" once) — ignore any message.delta/message.complete that
-        # arrives before OUR prompt.submit actually goes out, so we don't
-        # return that greeting instead of the real answer.
+        session_id: str | None = None
+        # A brand-new session sends an unprompted `session.info` event ~500ms
+        # after session.create's result, on its own — sending prompt.submit
+        # before that arrives seems to get the message silently dropped/
+        # unattached (every reply since started "the user hasn't said
+        # anything yet", even with an explicit 500ms wait beforehand — this
+        # is the one thing we haven't tried: gating on the real signal instead
+        # of a guessed delay). Ignore any message.delta/message.complete until
+        # our prompt.submit has actually gone out, so we don't return
+        # whatever unprompted turn happens before that either.
         prompt_submitted = False
 
         async for raw in ws:
@@ -369,14 +374,8 @@ async def _ask_hermes_ws(prompt: str) -> str:
 
                 elif msg.get("id") == 0 and msg.get("result"):
                     session_id = msg["result"].get("session_id")
-                    # NOTE: Hermes acks this (id:1, "status": "streaming") but
-                    # every turn since comes back reasoning "the user hasn't
-                    # said anything yet" — a 500ms delay before sending this
-                    # (ruling out a lazy-session-init race) made no difference.
-                    # params.content matches both the old useHermesWS.ts
-                    # protocol and Hermes's own just-confirmed example, so the
-                    # field name looks right too. Root cause is still open —
-                    # see conversation notes.
+
+                elif not prompt_submitted and method == "event" and mtype == "session.info":
                     await ws.send(json.dumps({
                         "id": 1, "method": "prompt.submit",
                         "params": {"content": prompt, "session_id": session_id},
