@@ -371,6 +371,7 @@ class RealtimeSession:
         log.info("playback stream open: native_rate=%d channels=%d dtype=%s", native_rate, channels, dtype)
         self.output_stream = stream
         state = None
+        written = 0
         try:
             while True:
                 pcm = self.playback_queue.get()
@@ -383,8 +384,12 @@ class RealtimeSession:
                 audio = _prepare_output_audio(int16_mono, channels, dtype)
                 try:
                     stream.write(audio)
-                except sd.PortAudioError:
+                    written += 1
+                    if written % 20 == 0:
+                        log.info("playback thread alive: %d chunks written, stream.active=%s", written, stream.active)
+                except sd.PortAudioError as e:
                     # stream was aborted by interrupt_playback() — reactivate and drop this chunk
+                    log.warning("stream.write failed (%s), reactivating stream", e)
                     stream.start()
         except Exception:
             log.exception("playback thread crashed")
