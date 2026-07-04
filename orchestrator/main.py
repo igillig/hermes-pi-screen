@@ -484,11 +484,16 @@ class RealtimeSession:
         if not self.awaiting_hermes:
             return  # cancelled while Hermes was thinking — drop the result
         self.awaiting_hermes = False
-        await self.ws.send(json.dumps({
-            "type": "conversation.item.create",
-            "item": {"type": "function_call_output", "call_id": call_id, "output": reply},
-        }))
-        await self.ws.send(json.dumps({"type": "response.create"}))
+        try:
+            await self.ws.send(json.dumps({
+                "type": "conversation.item.create",
+                "item": {"type": "function_call_output", "call_id": call_id, "output": reply},
+            }))
+            await self.ws.send(json.dumps({"type": "response.create"}))
+        except websockets.ConnectionClosed:
+            # The whole session (not just this turn) got stopped from the UI
+            # while Hermes was still working — nothing left to report this to.
+            log.info("session ended before Hermes's reply could be relayed: %s", reply)
 
     async def cancel(self) -> None:
         self.interrupt_playback()
