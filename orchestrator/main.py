@@ -103,6 +103,12 @@ SPEAKER_DEVICE = os.getenv("SPEAKER_DEVICE") or None
 MIC_FRAME_MS = 100  # chunk size fed to the Realtime API's input audio buffer;
 # bigger than the API's own minimum to cut down how often we hop threads /
 # hit the network per second on the Pi's limited CPU (was 20ms — 5x the rate).
+# Fallback only — with module-echo-cancel (docker-entrypoint.sh) actually
+# filtering Parche's own voice out of the mic, this shouldn't be needed and
+# defaults off so barge-in (interrupting mid-response) works. Flip to true if
+# AEC isn't cutting it on your hardware and you'd rather trade barge-in away
+# for stability again.
+MIC_MUTE_WHILE_SPEAKING = os.getenv("MIC_MUTE_WHILE_SPEAKING", "false").lower() == "true"
 MIC_UNMUTE_DELAY_S = float(os.getenv("MIC_UNMUTE_DELAY_S", "0.4"))  # see mic_muted above
 
 # Wake word ("che parche"), via openWakeWord — see orchestrator/.env.example for
@@ -410,6 +416,13 @@ class RealtimeSession:
                 log.info("sent %d audio chunks to the realtime API so far", sent)
 
     async def _unmute_mic_after_delay(self) -> None:
+        # response.done only means the API finished SENDING audio — our local
+        # playback_queue can still be draining if it arrived faster than real
+        # time, so wait for that too before starting the grace period. Without
+        # this, the mic could reopen while the speaker is still audibly
+        # finishing the response, picking itself back up as "new" speech.
+        while not self.playback_queue.empty():
+            await asyncio.sleep(0.05)
         await asyncio.sleep(MIC_UNMUTE_DELAY_S)
         self.mic_muted = False
 
@@ -420,8 +433,8 @@ class RealtimeSession:
 
         if etype == "input_audio_buffer.speech_started":
             if self.speaking:
-                # Shouldn't normally happen with the mic muted while speaking —
-                # kept as a safety net in case some echo still slips through.
+                # Real barge-in (AEC keeps this from firing on Parche's own
+                # echo) — the user started talking over the assistant, stop.
                 self.interrupt_playback()
                 self.speaking = False
             await set_status("listening")
@@ -431,7 +444,8 @@ class RealtimeSession:
             self.playback_queue.put_nowait(pcm)
             if not self.speaking:
                 self.speaking = True
-                self.mic_muted = True
+                if MIC_MUTE_WHILE_SPEAKING:
+                    self.mic_muted = True
                 await set_status("talking")
 
         elif etype == "response.output_audio_transcript.done":
@@ -451,7 +465,8 @@ class RealtimeSession:
 
         elif etype == "response.done":
             self.speaking = False
-            asyncio.create_task(self._unmute_mic_after_delay())
+            if MIC_MUTE_WHILE_SPEAKING:
+                asyncio.create_task(self._unmute_mic_after_delay())
             if not self.awaiting_hermes:
                 await set_status("listening")
 
