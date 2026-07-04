@@ -50,8 +50,12 @@ HERMES_API_KEY = os.getenv("HERMES_API_KEY", "")
 # project from the old browser hook (useHermesWS.ts) that talked to Hermes
 # this same way, including the `internal` query-param token.
 _HERMES_HOST = urlparse(HERMES_API_URL).hostname or "localhost"
-HERMES_WS_URL = os.getenv("HERMES_WS_URL", f"ws://{_HERMES_HOST}:9119/api/ws")
-HERMES_WS_TOKEN = os.getenv("HERMES_WS_TOKEN", "parche-internal-dev")
+# `or` on purpose, not os.getenv's default param: stack.yml always sets this
+# var (possibly to an empty string via ${HERMES_WS_URL:-}), and os.getenv's
+# default only kicks in when the var is entirely absent, not when present-but-
+# empty — that emptiness was silently winning over this fallback before.
+HERMES_WS_URL = os.getenv("HERMES_WS_URL") or f"ws://{_HERMES_HOST}:9119/api/ws"
+HERMES_WS_TOKEN = os.getenv("HERMES_WS_TOKEN") or "parche-internal-dev"
 
 STATUS_WS_HOST = os.getenv("STATUS_WS_HOST", "0.0.0.0")
 STATUS_WS_PORT = int(os.getenv("STATUS_WS_PORT", "8765"))
