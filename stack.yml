@@ -60,8 +60,14 @@ services:
       REALTIME_VOICE: ${REALTIME_VOICE:-marin}
       # Used only for the ask_hermes tool the realtime model calls when it
       # needs real capability (search, actions, etc), not for every turn.
+      # HERMES_MODE=http is plain REST (no tools, proven/stable). ws is the
+      # gateway (tools enabled, same channel as Telegram) — still being
+      # debugged (auth/port/path), switch once confirmed working.
+      HERMES_MODE: ${HERMES_MODE:-ws}
       HERMES_API_URL: ${HERMES_API_URL:-http://hermes_agent:8000}
       HERMES_API_KEY: ${HERMES_API_KEY}
+      HERMES_WS_URL: ${HERMES_WS_URL:-}
+      HERMES_WS_TOKEN: ${HERMES_WS_TOKEN:-parche-internal-dev}
       STATUS_WS_HOST: 0.0.0.0
       STATUS_WS_PORT: 8765
       # Left unset: resolves to the ALSA "default" PCM, which asound.conf routes

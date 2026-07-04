@@ -26,6 +26,7 @@ import threading
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
 import numpy as np
 import sounddevice as sd
 import websockets
@@ -42,15 +43,15 @@ log = logging.getLogger("orchestrator")
 
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 HERMES_API_URL = os.getenv("HERMES_API_URL", "http://localhost:8000").rstrip("/")
+HERMES_API_KEY = os.getenv("HERMES_API_KEY", "")
 # The gateway WS (same channel Telegram uses, tools/skills enabled) — NOT the
 # plain REST API (HERMES_API_URL, port 8000), which answers as a bare LLM with
-# no tools at all. Same host, but its own port/path — confirmed earlier in
-# this project from the old browser hook (useHermesWS.ts) that talked to
-# Hermes this same way. No auth token wired in yet — add one here (header or
-# ?internal= query param, matching whatever the gateway expects) if it turns
-# out to reject unauthenticated same-network connections.
+# no tools at all. Same host, its own port/path — confirmed earlier in this
+# project from the old browser hook (useHermesWS.ts) that talked to Hermes
+# this same way, including the `internal` query-param token.
 _HERMES_HOST = urlparse(HERMES_API_URL).hostname or "localhost"
 HERMES_WS_URL = os.getenv("HERMES_WS_URL", f"ws://{_HERMES_HOST}:9119/api/ws")
+HERMES_WS_TOKEN = os.getenv("HERMES_WS_TOKEN", "parche-internal-dev")
 
 STATUS_WS_HOST = os.getenv("STATUS_WS_HOST", "0.0.0.0")
 STATUS_WS_PORT = int(os.getenv("STATUS_WS_PORT", "8765"))
@@ -295,49 +296,77 @@ def wait_for_wake_word() -> None:
             return
 
 
-# ── Hermes bridge — gateway WebSocket, not the plain REST API ──────────────
-# The REST /v1/chat/completions endpoint answers as a bare LLM: no tools, no
-# skills, can't actually turn anything on. Only the gateway WS (same channel
-# Telegram uses) runs with tools enabled. Same JSON-RPC-ish protocol the old
-# browser hook (useHermesWS.ts, pre-Realtime-API) used: wait for
-# gateway.ready, create a session, submit the prompt, collect message.delta
-# until message.complete.
+# ── Hermes bridge — two modes, picked by HERMES_MODE ────────────────────────
+# "http": plain REST /v1/chat/completions. Simple, proven, but answers as a
+#   bare LLM — no tools/skills, can't actually turn anything on.
+# "ws": the gateway WebSocket (same channel Telegram uses, tools/skills
+#   enabled). Same JSON-RPC-ish protocol the old browser hook (useHermesWS.ts,
+#   pre-Realtime-API) used: wait for gateway.ready, create a session, submit
+#   the prompt, collect message.delta until message.complete. Still being
+#   debugged (auth/port/path) — keep HERMES_MODE=http as the safe fallback
+#   while that's sorted out.
+HERMES_MODE = os.getenv("HERMES_MODE", "http").lower()
+
+
+def _ask_hermes_http_sync(prompt: str) -> str:
+    url = f"{HERMES_API_URL}/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if HERMES_API_KEY:
+        headers["Authorization"] = f"Bearer {HERMES_API_KEY}"
+    payload = {"model": "hermes", "messages": [{"role": "user", "content": prompt}], "stream": False}
+    resp = httpx.post(url, headers=headers, json=payload, timeout=120)
+    resp.raise_for_status()
+    data = resp.json()
+    return data["choices"][0]["message"]["content"]
+
+
+async def _ask_hermes_http(prompt: str) -> str:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _ask_hermes_http_sync, prompt)
+
+
+async def _ask_hermes_ws(prompt: str) -> str:
+    url = f"{HERMES_WS_URL}?internal={HERMES_WS_TOKEN}" if HERMES_WS_TOKEN else HERMES_WS_URL
+    async with websockets.connect(url) as ws:
+        accumulated = ""
+
+        async for raw in ws:
+            for line in raw.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                msg = json.loads(line)
+                method = msg.get("method")
+                mtype = (msg.get("params") or {}).get("type")
+
+                if method == "event" and mtype == "gateway.ready":
+                    await ws.send(json.dumps({
+                        "id": 0, "method": "session.create", "params": {"title": "parche-orchestrator"},
+                    }) + "\n")
+
+                elif msg.get("id") == 0 and msg.get("result"):
+                    session_id = msg["result"].get("session_id")
+                    await ws.send(json.dumps({
+                        "id": 1, "method": "prompt.submit",
+                        "params": {"content": prompt, "session_id": session_id},
+                    }) + "\n")
+
+                elif method == "event" and mtype == "message.delta":
+                    accumulated += (msg.get("params", {}).get("payload") or {}).get("text", "")
+
+                elif method == "event" and mtype == "message.complete":
+                    payload = msg.get("params", {}).get("payload") or {}
+                    return payload.get("text") or accumulated
+    return accumulated
+
 
 async def ask_hermes(prompt: str) -> str:
     try:
-        async with websockets.connect(HERMES_WS_URL) as ws:
-            session_id: str | None = None
-            accumulated = ""
-
-            async for raw in ws:
-                for line in raw.split("\n"):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    msg = json.loads(line)
-                    method = msg.get("method")
-                    mtype = (msg.get("params") or {}).get("type")
-
-                    if method == "event" and mtype == "gateway.ready":
-                        await ws.send(json.dumps({
-                            "id": 0, "method": "session.create", "params": {"title": "parche-orchestrator"},
-                        }) + "\n")
-
-                    elif msg.get("id") == 0 and msg.get("result"):
-                        session_id = msg["result"].get("session_id")
-                        await ws.send(json.dumps({
-                            "id": 1, "method": "prompt.submit",
-                            "params": {"content": prompt, "session_id": session_id},
-                        }) + "\n")
-
-                    elif method == "event" and mtype == "message.delta":
-                        accumulated += (msg.get("params", {}).get("payload") or {}).get("text", "")
-
-                    elif method == "event" and mtype == "message.complete":
-                        payload = msg.get("params", {}).get("payload") or {}
-                        return payload.get("text") or accumulated
+        if HERMES_MODE == "ws":
+            return await _ask_hermes_ws(prompt)
+        return await _ask_hermes_http(prompt)
     except Exception:
-        log.exception("ask_hermes (gateway) failed for prompt: %r", prompt)
+        log.exception("ask_hermes (%s) failed for prompt: %r", HERMES_MODE, prompt)
         return "No pude conectarme con Hermes ahora, intentemos de nuevo en un rato."
 
 
