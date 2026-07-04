@@ -100,9 +100,12 @@ ASK_HERMES_TOOL = {
 
 MIC_DEVICE = os.getenv("MIC_DEVICE") or None
 SPEAKER_DEVICE = os.getenv("SPEAKER_DEVICE") or None
-MIC_FRAME_MS = 100  # chunk size fed to the Realtime API's input audio buffer;
-# bigger than the API's own minimum to cut down how often we hop threads /
-# hit the network per second on the Pi's limited CPU (was 20ms — 5x the rate).
+MIC_FRAME_MS = int(os.getenv("MIC_FRAME_MS", "300"))  # chunk size fed to the
+# Realtime API's input audio buffer. Bigger = fewer thread-hops/network sends
+# per second — DIAGNOSTIC bump from 100 to 300 to test whether mic-send load
+# competing with the playback thread is what's breaking audio output while
+# Parche talks (full-duplex, no muting). Higher also means slower reaction
+# time to detect the user starting to talk.
 
 # No acoustic echo cancellation on this hardware, so without a properly
 # isolated mic the server VAD can pick up Parche's own voice from the speaker
