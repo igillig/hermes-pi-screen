@@ -330,7 +330,12 @@ async def _ask_hermes_http(prompt: str) -> str:
 
 
 async def _ask_hermes_ws(prompt: str) -> str:
-    url = f"{HERMES_WS_URL}?internal={HERMES_WS_TOKEN}" if HERMES_WS_TOKEN else HERMES_WS_URL
+    # Hermes itself confirmed this exact URL+token combo connects and gets
+    # gateway.ready when tested directly — if this still 403s from in here,
+    # it's very likely the gateway checking the connecting IP/network as
+    # "internal", not the token itself (our container's docker-network IP vs.
+    # the Pi's LAN IP the direct test used).
+    url = f"{HERMES_WS_URL}?internal={HERMES_WS_TOKEN}"
     async with websockets.connect(url) as ws:
         accumulated = ""
 
