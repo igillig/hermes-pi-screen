@@ -341,55 +341,72 @@ async def _ask_hermes_ws(prompt: str) -> str:
         log.info("hermes gateway: connected")
         accumulated = ""
         session_id: str | None = None
-        # Every freshly created session fires ONE automatic/spontaneous turn
-        # of its own (message.start...message.complete, generic "how can I
-        # help you" filler) no matter what we do or when we send prompt.submit
-        # — racing it (immediately, after a delay, after session.info) always
-        # lost, our real prompt kept getting ignored in favor of that turn.
-        # So stop racing it: let it finish, THEN submit our real prompt as a
-        # second turn in the same now-warmed-up session.
-        auto_turn_done = False
+        # Freshly created sessions SOMETIMES fire one automatic/spontaneous
+        # turn of their own (message.start...message.complete, generic "how
+        # can I help you" filler) before ever looking at prompt.submit — but
+        # not always (seen both ways). So: if one happens, let it finish and
+        # discard it, then submit the real prompt as the next turn. If none
+        # happens within a few seconds, submit anyway rather than hang forever.
         prompt_submitted = False
+        timeout_task: asyncio.Task | None = None
 
-        async for raw in ws:
-            for line in raw.split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                msg = json.loads(line)
-                method = msg.get("method")
-                mtype = (msg.get("params") or {}).get("type")
-                # Full message, not just method/type — tool-call details (which
-                # tool, args, whether it actually ran vs errored) live in
-                # params/payload fields we don't otherwise parse, and this is
-                # the only way to see whether Hermes really executed something
-                # or is just claiming to.
-                log.info("hermes gateway message: %s", line[:2000])
+        async def submit_prompt() -> None:
+            nonlocal prompt_submitted
+            if prompt_submitted:
+                return
+            prompt_submitted = True
+            await ws.send(json.dumps({
+                "id": 1, "method": "prompt.submit",
+                "params": {"content": prompt, "session_id": session_id},
+            }) + "\n")
 
-                if method == "event" and mtype == "gateway.ready":
-                    await ws.send(json.dumps({
-                        "id": 0, "method": "session.create", "params": {"title": "parche-orchestrator"},
-                    }) + "\n")
+        async def submit_after_timeout() -> None:
+            await asyncio.sleep(4.0)
+            if not prompt_submitted:
+                log.info("hermes gateway: no automatic turn within 4s, submitting prompt now")
+                await submit_prompt()
 
-                elif msg.get("id") == 0 and msg.get("result"):
-                    session_id = msg["result"].get("session_id")
+        try:
+            async for raw in ws:
+                for line in raw.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    msg = json.loads(line)
+                    method = msg.get("method")
+                    mtype = (msg.get("params") or {}).get("type")
+                    # Full message, not just method/type — tool-call details
+                    # (which tool, args, whether it actually ran vs errored)
+                    # live in params/payload fields we don't otherwise parse,
+                    # and this is the only way to see whether Hermes really
+                    # executed something or is just claiming to.
+                    log.info("hermes gateway message: %s", line[:2000])
 
-                elif not auto_turn_done and method == "event" and mtype == "message.complete":
-                    # The automatic greeting turn just finished — discard its
-                    # text, now submit the real prompt as the next turn.
-                    auto_turn_done = True
-                    await ws.send(json.dumps({
-                        "id": 1, "method": "prompt.submit",
-                        "params": {"content": prompt, "session_id": session_id},
-                    }) + "\n")
-                    prompt_submitted = True
+                    if method == "event" and mtype == "gateway.ready":
+                        await ws.send(json.dumps({
+                            "id": 0, "method": "session.create", "params": {"title": "parche-orchestrator"},
+                        }) + "\n")
 
-                elif prompt_submitted and method == "event" and mtype == "message.delta":
-                    accumulated += (msg.get("params", {}).get("payload") or {}).get("text", "")
+                    elif msg.get("id") == 0 and msg.get("result"):
+                        session_id = msg["result"].get("session_id")
+                        timeout_task = asyncio.create_task(submit_after_timeout())
 
-                elif prompt_submitted and method == "event" and mtype == "message.complete":
-                    payload = msg.get("params", {}).get("payload") or {}
-                    return payload.get("text") or accumulated
+                    elif not prompt_submitted and method == "event" and mtype == "message.complete":
+                        # The automatic greeting turn just finished — discard
+                        # its text, now submit the real prompt as the next turn.
+                        if timeout_task is not None:
+                            timeout_task.cancel()
+                        await submit_prompt()
+
+                    elif prompt_submitted and method == "event" and mtype == "message.delta":
+                        accumulated += (msg.get("params", {}).get("payload") or {}).get("text", "")
+
+                    elif prompt_submitted and method == "event" and mtype == "message.complete":
+                        payload = msg.get("params", {}).get("payload") or {}
+                        return payload.get("text") or accumulated
+        finally:
+            if timeout_task is not None and not timeout_task.done():
+                timeout_task.cancel()
     return accumulated
 
 
