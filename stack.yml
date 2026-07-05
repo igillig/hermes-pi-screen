@@ -83,7 +83,13 @@ services:
       OWW_MODEL_PATH: ${OWW_MODEL_PATH:-}
       OWW_THRESHOLD: ${OWW_THRESHOLD:-0.5}
     volumes:
-      - ./orchestrator/models:/app/models
+      # NOT ./orchestrator/models: that's inside the git checkout, and the
+      # deploy workflow's `actions/checkout` runs `git clean` on every push,
+      # which wipes gitignored files too — a custom wake-word model dropped
+      # there would vanish on the next deploy. This path lives outside the
+      # repo entirely, so it survives deploys. Create it once on the Pi:
+      # `mkdir -p ~/parche-models` (or wherever), then drop .onnx files there.
+      - ${WAKE_WORD_MODELS_DIR:-./orchestrator/models}:/app/models
     ports:
       - "8765:8765"
     restart: unless-stopped

@@ -11,7 +11,7 @@ name: Deploy parche-ui
 #   Variables: HOST_PORT (optional, default 8080)
 #              VITE_HERMES_API_URL (optional, default /api)
 #              VITE_ORCHESTRATOR_WS_URL (optional — same-origin /ws-status via nginx by default, no need to set)
-#              WAKE_WORD_ENABLED (optional, default false)
+#              WAKE_WORD_ENABLED (optional, default true)
 #              STT_LANGUAGE (optional, default es)
 #              ELEVENLABS_VOICE_ID (optional, default wfTWLJ20rcMqvU8gIiAB)
 #              ELEVENLABS_MODEL_ID (optional, default eleven_flash_v2_5)
