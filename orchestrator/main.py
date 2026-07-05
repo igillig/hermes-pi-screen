@@ -74,13 +74,8 @@ español rioplatense, tono informal y directo, como si fueras un amigo copado.
 Cuando el pedido del usuario requiera buscar información actualizada, ejecutar \
 una acción real (prender/apagar algo, controlar un dispositivo, leer archivos, \
 o cualquier cosa que exceda una charla simple), invocá la herramienta \
-ask_hermes con el pedido.
-
-Muy importante: cuando decidas invocar ask_hermes, ANTES de esperar el \
-resultado respondé primero con una frase corta y natural reconociendo el \
-pedido (por ejemplo "dale, dame un segundo", "ok, ya lo hago", "esperá un \
-toque que lo reviso") — variá la frase cada vez, que no suene siempre igual. \
-Recién después invocá la herramienta.
+ask_hermes sin responder primero — el sistema ya avisa al usuario que estás \
+procesando, así que invocá la herramienta directamente.
 
 Cuando recibas el resultado de ask_hermes, contestale al usuario con esa \
 información de forma natural y conversacional — no la leas textual si es \
@@ -450,6 +445,8 @@ class RealtimeSession:
         self.stop_event = threading.Event()
         self.awaiting_hermes = False
         self.speaking = False
+        self.response_completed = asyncio.Event()
+        self.response_completed.set()
         # Half-duplex mic muting: no acoustic echo cancellation on this hardware
         # (raw ALSA, not WebRTC), so without a properly isolated mic/headset the
         # server VAD picks up Parche's own voice from the speaker and starts
@@ -591,6 +588,7 @@ class RealtimeSession:
 
         elif etype == "response.done":
             self.speaking = False
+            self.response_completed.set()
             if MIC_MUTE_WHILE_SPEAKING:
                 asyncio.create_task(self._unmute_mic_after_delay())
             if not self.awaiting_hermes:
@@ -601,20 +599,58 @@ class RealtimeSession:
 
     async def _resolve_hermes_call(self, call_id: str, prompt: str) -> None:
         log.info("ask_hermes: %s", prompt)
+
+        # Phase 1: ACK inmediato — OpenAI responde al toque mientras Hermes
+        # procesa en background. Así el usuario nunca escucha silencio.
+        #
+        # This task gets spawned from the function_call_arguments.done handler
+        # while the response that decided to call the tool (call it response
+        # A) may still be streaming — its own response.done hasn't fired yet.
+        # Wait for that FIRST: response_completed is a single Event shared
+        # with the generic response.done handler, so if we cleared it and
+        # sent our own response.create before response A's response.done
+        # arrived, that done event would satisfy our wait() prematurely (it
+        # doesn't distinguish which response finished). Waiting here first
+        # means the event only ever tracks one response at a time.
+        try:
+            await self.response_completed.wait()
+            await self.ws.send(json.dumps({
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": "OK, ya le estoy pidiendo a Hermes que procese eso.",
+                },
+            }))
+            self.response_completed.clear()
+            await self.ws.send(json.dumps({"type": "response.create"}))
+            await self.response_completed.wait()
+            await set_status("thinking")
+        except websockets.ConnectionClosed:
+            return
+
+        # Phase 2: Esperar la respuesta real de Hermes
         reply = await ask_hermes(prompt)
         log.info("hermes: %s", reply)
+
         if not self.awaiting_hermes:
             return  # cancelled while Hermes was thinking — drop the result
+
         self.awaiting_hermes = False
+
+        # Phase 3: Inyectar el resultado real como mensaje del usuario para
+        # que el modelo lo retome y responda con la información definitiva.
         try:
             await self.ws.send(json.dumps({
                 "type": "conversation.item.create",
-                "item": {"type": "function_call_output", "call_id": call_id, "output": reply},
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "text", "text": f"Resultado de Hermes: {reply}"}],
+                },
             }))
             await self.ws.send(json.dumps({"type": "response.create"}))
         except websockets.ConnectionClosed:
-            # The whole session (not just this turn) got stopped from the UI
-            # while Hermes was still working — nothing left to report this to.
             log.info("session ended before Hermes's reply could be relayed: %s", reply)
 
     async def cancel(self) -> None:
@@ -622,6 +658,7 @@ class RealtimeSession:
         self.awaiting_hermes = False
         self.speaking = False
         self.mic_muted = False
+        self.response_completed.set()
         await self.ws.send(json.dumps({"type": "response.cancel"}))
         await set_status("listening")
 
