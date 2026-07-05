@@ -310,16 +310,24 @@ def wait_for_wake_word() -> None:
     log.info("wake word listener: armed (threshold=%.2f)", OWW_THRESHOLD)
     frame_count = 0
     best_scores: dict[str, float] = {}
+    best_rms = 0.0
     for frame in _frames_at_rate(MIC_DEVICE, OWW_SAMPLE_RATE, frame_ms, stop_event=wake_word_stop_event):
         pcm = np.frombuffer(frame, dtype=np.int16)
+        # RMS of the raw samples — independent of what the wakeword model
+        # thinks, this tells us whether real (loud) audio is reaching it at
+        # all, to rule out a mic gain/routing problem vs. an accent/model
+        # mismatch when scores stay low.
+        rms = float(np.sqrt(np.mean(pcm.astype(np.float64) ** 2)))
+        best_rms = max(best_rms, rms)
         scores = wakeword_model.predict(pcm)
         frame_count += 1
         for name, score in scores.items():
             if score > best_scores.get(name, 0.0):
                 best_scores[name] = score
         if frame_count % 25 == 0:  # ~every 2s at 80ms/frame
-            log.info("wake word listener: alive, %d frames, best scores so far: %s",
-                      frame_count, {k: round(v, 3) for k, v in best_scores.items()})
+            log.info("wake word listener: alive, %d frames, best scores so far: %s, peak RMS: %.0f",
+                      frame_count, {k: round(v, 3) for k, v in best_scores.items()}, best_rms)
+            best_rms = 0.0
         if any(score >= OWW_THRESHOLD for score in scores.values()):
             log.info("wake word detected: %s", {k: round(v, 3) for k, v in scores.items()})
             return
