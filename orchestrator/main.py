@@ -184,6 +184,7 @@ def start_session() -> None:
 def stop_session() -> None:
     if current_session_task is not None and not current_session_task.done():
         log.info("session stop requested from UI")
+        wake_word_stop_event.set()
         current_session_task.cancel()
 
 
@@ -216,9 +217,17 @@ def _query_native_rate(device: str | int | None, kind: str) -> int:
     return int(info["default_samplerate"])
 
 
-def _frames_at_rate(device: str | int | None, target_rate: int, frame_ms: int):
+def _frames_at_rate(
+    device: str | int | None, target_rate: int, frame_ms: int,
+    stop_event: threading.Event | None = None,
+):
     """Yields fixed-size `frame_ms`-long PCM16 mono chunks at `target_rate`,
-    resampling on the fly from the mic's native rate. Runs forever."""
+    resampling on the fly from the mic's native rate. Runs forever, unless
+    stop_event is set — needed because this runs in a plain executor thread,
+    which asyncio task cancellation does NOT actually interrupt: without this,
+    stopping a session while wait_for_wake_word is blocked here leaves its
+    InputStream open forever, and the next start fails with "Device
+    unavailable" fighting over the same mic."""
     native_rate = _query_native_rate(device, "input")
     native_frame_samples = max(1, native_rate * frame_ms // 1000)
     frame_bytes = target_rate * frame_ms // 1000 * 2
@@ -230,6 +239,8 @@ def _frames_at_rate(device: str | int | None, target_rate: int, frame_ms: int):
         blocksize=native_frame_samples, device=device,
     ) as stream:
         while True:
+            if stop_event is not None and stop_event.is_set():
+                return
             data, _ = stream.read(native_frame_samples)
             chunk = data.tobytes()
             if native_rate != target_rate:
@@ -286,11 +297,17 @@ def _open_output_stream() -> tuple[sd.OutputStream, int, int, str]:
 
 # ── Wake word (blocking, runs in a worker thread) ───────────────────────────
 
+# Set by stop_session() to break wait_for_wake_word out of its blocking loop —
+# cancelling the asyncio task wrapping it does NOT stop the underlying thread.
+wake_word_stop_event = threading.Event()
+
+
 def wait_for_wake_word() -> None:
-    """Blocks until "che parche" is detected."""
+    """Blocks until the wake word is detected, or wake_word_stop_event is set."""
     wakeword_model.reset()
+    wake_word_stop_event.clear()
     frame_ms = OWW_CHUNK_SAMPLES * 1000 // OWW_SAMPLE_RATE
-    for frame in _frames_at_rate(MIC_DEVICE, OWW_SAMPLE_RATE, frame_ms):
+    for frame in _frames_at_rate(MIC_DEVICE, OWW_SAMPLE_RATE, frame_ms, stop_event=wake_word_stop_event):
         pcm = np.frombuffer(frame, dtype=np.int16)
         scores = wakeword_model.predict(pcm)
         if any(score >= OWW_THRESHOLD for score in scores.values()):
@@ -660,7 +677,13 @@ async def _session_runner() -> None:
         if WAKE_WORD_ENABLED:
             await set_status("wake_word")
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, wait_for_wake_word)
+            try:
+                await loop.run_in_executor(None, wait_for_wake_word)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("wake word listener crashed, stopping session")
+                return
 
         while True:
             try:
