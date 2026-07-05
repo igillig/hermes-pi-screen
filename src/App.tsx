@@ -46,9 +46,11 @@ export default function App() {
         <div className="hud-bottom">
           {!connected
             ? <span className="hud-hint">{STRINGS.hud.connecting}</span>
-            : sessionActive
-              ? <span className={`hud-state ${orbState}`}>{STRINGS.orbState[orbState]}</span>
-              : null
+            : orbState === 'wake_word'
+              ? <span className="hud-hint">{STRINGS.hud.wakeWordHint}</span>
+              : sessionActive
+                ? <span className={`hud-state ${orbState}`}>{STRINGS.orbState[orbState]}</span>
+                : null
           }
         </div>
       </div>

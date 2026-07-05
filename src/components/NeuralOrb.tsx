@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 
-export type OrbState = 'idle' | 'listening' | 'thinking' | 'talking'
+export type OrbState = 'idle' | 'wake_word' | 'listening' | 'thinking' | 'talking'
 
 // ─── Shaders ──────────────────────────────────────────────────────────────────
 
@@ -79,6 +79,11 @@ interface Cfg {
 
 const S: Record<OrbState, Cfg> = {
   idle: {
+    color: new THREE.Color(0x0099dd), glowOp: 0.25, nodeOp: 0.70, connDim: 0.055,
+    pulseRate: 2.5, pulseSpeed: 0.22, maxPulses: 10,
+    radius: 1.00, breathAmp: 0.012, breathRate: 0.65, rotY: 0.0014, rotX: 0.0004,
+  },
+  wake_word: {
     color: new THREE.Color(0x0099dd), glowOp: 0.25, nodeOp: 0.70, connDim: 0.055,
     pulseRate: 2.5, pulseSpeed: 0.22, maxPulses: 10,
     radius: 1.00, breathAmp: 0.012, breathRate: 0.65, rotY: 0.0014, rotX: 0.0004,

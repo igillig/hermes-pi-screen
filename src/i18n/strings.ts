@@ -10,6 +10,7 @@ export const STRINGS = {
   // NeuralOrb / HUD overlay states — mirrors the orchestrator's status WS.
   orbState: {
     idle: '',
+    wake_word: '',
     listening: 'LISTENING',
     thinking: 'THINKING',
     talking: 'TALKING',
@@ -17,7 +18,7 @@ export const STRINGS = {
 
   hud: {
     connecting: 'CONNECTING...',
-    wakeWordHint: "DECÍ 'CHE PARCHE'", // unused until wake word is trained/enabled again
+    wakeWordHint: "DECÍ 'HEY JARVIS'",
     startSession: 'EMPEZAR',
     stopSession: 'CORTAR',
     cancel: 'CANCELAR',

@@ -76,10 +76,11 @@ services:
       MIC_DEVICE: ${MIC_DEVICE:-}
       SPEAKER_DEVICE: ${SPEAKER_DEVICE:-}
       VAD_THRESHOLD: ${VAD_THRESHOLD:-0.7}
-      # Wake word stays off until a custom model is trained and dropped into
-      # ./orchestrator/models (see orchestrator/.env.example).
-      WAKE_WORD_ENABLED: ${WAKE_WORD_ENABLED:-false}
-      OWW_MODEL_PATH: ${OWW_MODEL_PATH:-/app/models/che_parche.onnx}
+      # Wake word — defaults to openWakeWord's bundled pretrained "hey_jarvis"
+      # model (no training needed). Set OWW_MODEL_PATH to a custom model
+      # dropped into ./orchestrator/models for a different phrase.
+      WAKE_WORD_ENABLED: ${WAKE_WORD_ENABLED:-true}
+      OWW_MODEL_PATH: ${OWW_MODEL_PATH:-}
       OWW_THRESHOLD: ${OWW_THRESHOLD:-0.5}
     volumes:
       - ./orchestrator/models:/app/models

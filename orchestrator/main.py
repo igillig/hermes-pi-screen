@@ -128,21 +128,18 @@ MIC_FRAME_MS = 100  # chunk size fed to the Realtime API's input audio buffer;
 MIC_MUTE_WHILE_SPEAKING = os.getenv("MIC_MUTE_WHILE_SPEAKING", "false").lower() == "true"
 MIC_UNMUTE_DELAY_S = float(os.getenv("MIC_UNMUTE_DELAY_S", "0.4"))  # see mic_muted above
 
-# Wake word ("che parche"), via openWakeWord — see orchestrator/.env.example for
-# how to train the custom model. Disabled by default: until the custom model is
-# trained and validated, the realtime session just opens immediately and stays
-# connected for the life of the script (no re-arming after it closes).
-WAKE_WORD_ENABLED = os.getenv("WAKE_WORD_ENABLED", "false").lower() == "true"
-OWW_MODEL_PATH = os.getenv("OWW_MODEL_PATH")
+# Wake word, via openWakeWord. Uses the bundled pretrained "hey_jarvis" model
+# by default — no custom training needed. Set OWW_MODEL_PATH to a custom
+# trained model (see orchestrator/.env.example) to use a different phrase.
+WAKE_WORD_ENABLED = os.getenv("WAKE_WORD_ENABLED", "true").lower() == "true"
+OWW_MODEL_PATH = os.getenv("OWW_MODEL_PATH") or "hey_jarvis"
 OWW_THRESHOLD = float(os.getenv("OWW_THRESHOLD", "0.5"))
 OWW_SAMPLE_RATE = 16000
 OWW_CHUNK_SAMPLES = int(os.getenv("OWW_CHUNK_SAMPLES", "1280"))  # 80ms, openWakeWord's recommended chunk size
 
 wakeword_model = None
 if WAKE_WORD_ENABLED:
-    if not OWW_MODEL_PATH:
-        raise RuntimeError("WAKE_WORD_ENABLED=true requires OWW_MODEL_PATH")
-    download_wakeword_models()  # fetches the shared feature-extraction models (idempotent)
+    download_wakeword_models()  # fetches the pretrained models, incl. hey_jarvis (idempotent)
     wakeword_model = WakeWordModel(wakeword_models=[OWW_MODEL_PATH], inference_framework="onnx")
 
 # ── Status WebSocket server ──────────────────────────────────────────────────
@@ -654,13 +651,14 @@ async def _watch_for_cancel(session: RealtimeSession) -> None:
 # ── Main ─────────────────────────────────────────────────────────────────────
 # The realtime session is NOT started automatically — the mic stays fully
 # closed (no cost, nothing listening) until the UI sends {"action": "start"},
-# and {"action": "stop"} tears it down again. WAKE_WORD_ENABLED, once a model
-# is trained, will replace the manual button as the trigger for start_session().
+# and {"action": "stop"} tears it down again. With WAKE_WORD_ENABLED, pressing
+# start arms wake-word listening (status "wake_word") instead of opening the
+# realtime session immediately; saying it is what actually opens the connection.
 
 async def _session_runner() -> None:
     try:
         if WAKE_WORD_ENABLED:
-            await set_status("idle")
+            await set_status("wake_word")
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, wait_for_wake_word)
 
